@@ -1,0 +1,9 @@
+[package]
+name = "sg200x-bsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tock-registers = "0.9"
+bit-struct = "0.3.2"
+log = "0.4"
