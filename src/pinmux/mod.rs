@@ -268,6 +268,10 @@ impl Pinmux {
     pub fn get_sd0_d3_func(&self) -> u32 {
         self.fmux.sd0_d3.read(FMUX_SD0_D3::FSEL)
     }
+
+    pub fn get_aux0_input(&self) -> u32 {
+        self.fmux.aux0.read(FMUX_AUX0::FSEL)
+    }
 }
 
 // ============================================================================
