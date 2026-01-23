@@ -109,7 +109,7 @@ pub enum SchmittTriggerLevel {
 /// 提供对 SG2002 引脚复用系统的访问接口
 pub struct Pinmux {
     /// FMUX 寄存器组
-    fmux: &'static FmuxRegisters,
+    pub fmux: &'static FmuxRegisters,
     /// IOBLK G1 组寄存器
     ioblk_g1: &'static IoblkG1Registers,
     /// IOBLK G7 组寄存器
@@ -389,5 +389,130 @@ impl Pinmux {
     /// 获取 PWR_GPIO2 引脚当前功能
     pub fn get_pwr_gpio2_func(&self) -> u32 {
         self.fmux.pwr_gpio2.read(FMUX_PWR_GPIO2::FSEL)
+    }
+}
+
+// ============================================================================
+// IIC3 引脚配置便捷方法 (通过 SD1_CMD/SD1_CLK 复用)
+// ============================================================================
+
+impl Pinmux {
+    /// 配置 SD1_CMD 为 IIC3_SCL 功能
+    ///
+    /// 将 SD1_CMD (Pin 55) 引脚复用为 I2C3 的时钟线 (SCL)
+    /// 功能选择值 = 2
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let pinmux = unsafe { Pinmux::new() };
+    /// pinmux.set_iic3_scl_on_sd1_cmd();
+    /// ```
+    pub fn set_iic3_scl_on_sd1_cmd(&self) {
+        self.fmux.sd1_cmd.write(FMUX_SD1_CMD::FSEL.val(FMUX_SD1_CMD::FSEL::IIC3_SCL.into()));
+    }
+
+    /// 配置 SD1_CLK 为 IIC3_SDA 功能
+    ///
+    /// 将 SD1_CLK (Pin 56) 引脚复用为 I2C3 的数据线 (SDA)
+    /// 功能选择值 = 2
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let pinmux = unsafe { Pinmux::new() };
+    /// pinmux.set_iic3_sda_on_sd1_clk();
+    /// ```
+    pub fn set_iic3_sda_on_sd1_clk(&self) {
+        self.fmux.sd1_clk.write(FMUX_SD1_CLK::FSEL.val(FMUX_SD1_CLK::FSEL::IIC3_SDA.into()));
+    }
+
+    /// 配置 IIC3 引脚 (SD1_CMD -> SCL, SD1_CLK -> SDA)
+    ///
+    /// 一次性配置 I2C3 的两个引脚:
+    /// - SD1_CMD (Pin 55) -> IIC3_SCL
+    /// - SD1_CLK (Pin 56) -> IIC3_SDA
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let pinmux = unsafe { Pinmux::new() };
+    /// pinmux.setup_iic3_pins();
+    /// ```
+    pub fn setup_iic3_pins(&self) {
+        self.set_iic3_scl_on_sd1_cmd();
+        self.set_iic3_sda_on_sd1_clk();
+    }
+
+    /// 设置 SD1_D3 引脚功能 (类型安全版本)
+    pub fn set_sd1_d3_func(&self, func: FMUX_SD1_D3::FSEL::Value) {
+        self.fmux.sd1_d3.write(FMUX_SD1_D3::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_D3 引脚当前功能
+    pub fn get_sd1_d3_func(&self) -> u32 {
+        self.fmux.sd1_d3.read(FMUX_SD1_D3::FSEL)
+    }
+
+    /// 设置 SD1_D2 引脚功能 (类型安全版本)
+    pub fn set_sd1_d2_func(&self, func: FMUX_SD1_D2::FSEL::Value) {
+        self.fmux.sd1_d2.write(FMUX_SD1_D2::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_D2 引脚当前功能
+    pub fn get_sd1_d2_func(&self) -> u32 {
+        self.fmux.sd1_d2.read(FMUX_SD1_D2::FSEL)
+    }
+
+    /// 设置 SD1_D1 引脚功能 (类型安全版本)
+    pub fn set_sd1_d1_func(&self, func: FMUX_SD1_D1::FSEL::Value) {
+        self.fmux.sd1_d1.write(FMUX_SD1_D1::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_D1 引脚当前功能
+    pub fn get_sd1_d1_func(&self) -> u32 {
+        self.fmux.sd1_d1.read(FMUX_SD1_D1::FSEL)
+    }
+
+    /// 设置 SD1_D0 引脚功能 (类型安全版本)
+    pub fn set_sd1_d0_func(&self, func: FMUX_SD1_D0::FSEL::Value) {
+        self.fmux.sd1_d0.write(FMUX_SD1_D0::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_D0 引脚当前功能
+    pub fn get_sd1_d0_func(&self) -> u32 {
+        self.fmux.sd1_d0.read(FMUX_SD1_D0::FSEL)
+    }
+
+    /// 设置 SD1_CMD 引脚功能 (类型安全版本)
+    ///
+    /// 注意: IIC3_SCL 在此引脚上 (功能选择 = 2)
+    pub fn set_sd1_cmd_func(&self, func: FMUX_SD1_CMD::FSEL::Value) {
+        self.fmux.sd1_cmd.write(FMUX_SD1_CMD::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_CMD 引脚当前功能
+    pub fn get_sd1_cmd_func(&self) -> u32 {
+        self.fmux.sd1_cmd.read(FMUX_SD1_CMD::FSEL)
+    }
+
+    /// 设置 SD1_CLK 引脚功能 (类型安全版本)
+    ///
+    /// 注意: IIC3_SDA 在此引脚上 (功能选择 = 2)
+    pub fn set_sd1_clk_func(&self, func: FMUX_SD1_CLK::FSEL::Value) {
+        self.fmux.sd1_clk.write(FMUX_SD1_CLK::FSEL.val(func as u32));
+    }
+
+    /// 获取 SD1_CLK 引脚当前功能
+    pub fn get_sd1_clk_func(&self) -> u32 {
+        self.fmux.sd1_clk.read(FMUX_SD1_CLK::FSEL)
+    }
+}
+
+impl Pinmux {
+    pub fn set_iic3(&self) {
+        self.fmux.sd1_cmd.write(FMUX_SD1_CMD::FSEL::IIC3_SCL);
+        self.fmux.sd1_clk.write(FMUX_SD1_CLK::FSEL::IIC3_SDA);
+    }
+
+    pub fn set_pwm_7(&self) {
+        self.fmux.jtag_cpu_tms.write(FMUX_JTAG_CPU_TMS::FSEL::PWM_7);
     }
 }

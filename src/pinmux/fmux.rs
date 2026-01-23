@@ -1109,6 +1109,225 @@ register_bitfields! [
     pub FMUX_PKG_TYPE [
         /// 功能选择
         FSEL OFFSET(0) NUMBITS(3) []
+    ],
+
+    // ========================================================================
+    // SD1 引脚功能选择 (GRTC 组)
+    // 注意: IIC3 在 SD1_CMD (SCL) 和 SD1_CLK (SDA) 上
+    // ========================================================================
+
+    /// SD1_D3 功能选择 (Pin 51, 偏移 0xD0)
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_D3_VO32
+    /// - 1: SPI2_CS_X
+    /// - 2: IIC1_SCL
+    /// - 3: PWR_GPIO[18]
+    /// - 4: CAM_MCLK0
+    /// - 5: UART3_CTS
+    /// - 6: PWR_SPINOR1_CS_X (默认)
+    /// - 7: PWM[4]
+    pub FMUX_SD1_D3 [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_D3_VO32
+            PWR_SD1_D3_VO32 = 0,
+            /// SPI2_CS_X
+            SPI2_CS_X = 1,
+            /// IIC1_SCL
+            IIC1_SCL = 2,
+            /// PWR_GPIO[18]
+            PWR_GPIO_18 = 3,
+            /// CAM_MCLK0
+            CAM_MCLK0 = 4,
+            /// UART3_CTS
+            UART3_CTS = 5,
+            /// PWR_SPINOR1_CS_X (默认)
+            PWR_SPINOR1_CS_X = 6,
+            /// PWM[4]
+            PWM_4 = 7
+        ]
+    ],
+
+    /// SD1_D2 功能选择 (Pin 52, 偏移 0xD4)
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_D2_VO33
+    /// - 1: IIC1_SCL
+    /// - 2: UART2_TX
+    /// - 3: PWR_GPIO[19]
+    /// - 4: CAM_MCLK0
+    /// - 5: UART3_TX
+    /// - 6: PWR_SPINOR1_HOLD_X (默认)
+    /// - 7: PWM[5]
+    pub FMUX_SD1_D2 [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_D2_VO33
+            PWR_SD1_D2_VO33 = 0,
+            /// IIC1_SCL
+            IIC1_SCL = 1,
+            /// UART2_TX
+            UART2_TX = 2,
+            /// PWR_GPIO[19]
+            PWR_GPIO_19 = 3,
+            /// CAM_MCLK0
+            CAM_MCLK0 = 4,
+            /// UART3_TX
+            UART3_TX = 5,
+            /// PWR_SPINOR1_HOLD_X (默认)
+            PWR_SPINOR1_HOLD_X = 6,
+            /// PWM[5]
+            PWM_5 = 7
+        ]
+    ],
+
+    /// SD1_D1 功能选择 (Pin 53, 偏移 0xD8)
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_D1_VO34
+    /// - 1: IIC1_SDA
+    /// - 2: UART2_RX
+    /// - 3: PWR_GPIO[20]
+    /// - 4: CAM_MCLK1
+    /// - 5: UART3_RX
+    /// - 6: PWR_SPINOR1_WP_X (默认)
+    /// - 7: PWM[6]
+    pub FMUX_SD1_D1 [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_D1_VO34
+            PWR_SD1_D1_VO34 = 0,
+            /// IIC1_SDA
+            IIC1_SDA = 1,
+            /// UART2_RX
+            UART2_RX = 2,
+            /// PWR_GPIO[20]
+            PWR_GPIO_20 = 3,
+            /// CAM_MCLK1
+            CAM_MCLK1 = 4,
+            /// UART3_RX
+            UART3_RX = 5,
+            /// PWR_SPINOR1_WP_X (默认)
+            PWR_SPINOR1_WP_X = 6,
+            /// PWM[6]
+            PWM_6 = 7
+        ]
+    ],
+
+    /// SD1_D0 功能选择 (Pin 54, 偏移 0xDC)
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_D0_VO35
+    /// - 1: SPI2_SDI
+    /// - 2: IIC1_SDA
+    /// - 3: PWR_GPIO[21]
+    /// - 4: CAM_MCLK1
+    /// - 5: UART3_RTS
+    /// - 6: PWR_SPINOR1_MISO (默认)
+    /// - 7: PWM[7]
+    pub FMUX_SD1_D0 [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_D0_VO35
+            PWR_SD1_D0_VO35 = 0,
+            /// SPI2_SDI
+            SPI2_SDI = 1,
+            /// IIC1_SDA
+            IIC1_SDA = 2,
+            /// PWR_GPIO[21]
+            PWR_GPIO_21 = 3,
+            /// CAM_MCLK1
+            CAM_MCLK1 = 4,
+            /// UART3_RTS
+            UART3_RTS = 5,
+            /// PWR_SPINOR1_MISO (默认)
+            PWR_SPINOR1_MISO = 6,
+            /// PWM[7]
+            PWM_7 = 7
+        ]
+    ],
+
+    /// SD1_CMD 功能选择 (Pin 55, 偏移 0xE0)
+    ///
+    /// **IIC3_SCL 在此引脚上 (功能选择 = 2)**
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_CMD_VO36
+    /// - 1: SPI2_SDO
+    /// - 2: IIC3_SCL ← I2C3 时钟线
+    /// - 3: PWR_GPIO[22]
+    /// - 4: CAM_VS0
+    /// - 5: EPHY_LNK_LED
+    /// - 6: PWR_SPINOR1_MOSI (默认)
+    /// - 7: PWM[8]
+    pub FMUX_SD1_CMD [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_CMD_VO36
+            PWR_SD1_CMD_VO36 = 0,
+            /// SPI2_SDO
+            SPI2_SDO = 1,
+            /// IIC3_SCL - I2C3 时钟线
+            IIC3_SCL = 2,
+            /// PWR_GPIO[22]
+            PWR_GPIO_22 = 3,
+            /// CAM_VS0
+            CAM_VS0 = 4,
+            /// EPHY_LNK_LED
+            EPHY_LNK_LED = 5,
+            /// PWR_SPINOR1_MOSI (默认)
+            PWR_SPINOR1_MOSI = 6,
+            /// PWM[8]
+            PWM_8 = 7
+        ]
+    ],
+
+    /// SD1_CLK 功能选择 (Pin 56, 偏移 0xE4)
+    ///
+    /// **IIC3_SDA 在此引脚上 (功能选择 = 2)**
+    ///
+    /// 功能选择:
+    /// - 0: PWR_SD1_CLK_VO37
+    /// - 1: SPI2_SCK
+    /// - 2: IIC3_SDA ← I2C3 数据线
+    /// - 3: PWR_GPIO[23]
+    /// - 4: CAM_HS0
+    /// - 5: EPHY_SPD_LED
+    /// - 6: PWR_SPINOR1_SCK (默认)
+    /// - 7: PWM[9]
+    pub FMUX_SD1_CLK [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// PWR_SD1_CLK_VO37
+            PWR_SD1_CLK_VO37 = 0,
+            /// SPI2_SCK
+            SPI2_SCK = 1,
+            /// IIC3_SDA - I2C3 数据线
+            IIC3_SDA = 2,
+            /// PWR_GPIO[23]
+            PWR_GPIO_23 = 3,
+            /// CAM_HS0
+            CAM_HS0 = 4,
+            /// EPHY_SPD_LED
+            EPHY_SPD_LED = 5,
+            /// PWR_SPINOR1_SCK (默认)
+            PWR_SPINOR1_SCK = 6,
+            /// PWM[9]
+            PWM_9 = 7
+        ]
+    ],
+
+    /// PWM0_BUCK 功能选择 (Pin 58, 偏移 0xEC)
+    ///
+    /// 功能选择:
+    /// - 3: XGPIOB[0] (默认)
+    pub FMUX_PWM0_BUCK [
+        /// 功能选择
+        FSEL OFFSET(0) NUMBITS(3) [
+            /// XGPIOB[0] (默认)
+            XGPIOB_0 = 3
+        ]
     ]
 ];
 
@@ -1235,8 +1454,39 @@ register_structs! {
         /// PWR_GPIO2 功能选择寄存器 (偏移 0xAC)
         (0x0AC => pub pwr_gpio2: ReadWrite<u32, FMUX_PWR_GPIO2::Register>),
 
-        /// 保留 (偏移 0xB0-0xF4)
+        /// 保留 (偏移 0xB0-0xCC)
         (0x0B0 => _reserved6),
+
+        /// SD1_D3 功能选择寄存器 (偏移 0xD0)
+        (0x0D0 => pub sd1_d3: ReadWrite<u32, FMUX_SD1_D3::Register>),
+
+        /// SD1_D2 功能选择寄存器 (偏移 0xD4)
+        (0x0D4 => pub sd1_d2: ReadWrite<u32, FMUX_SD1_D2::Register>),
+
+        /// SD1_D1 功能选择寄存器 (偏移 0xD8)
+        (0x0D8 => pub sd1_d1: ReadWrite<u32, FMUX_SD1_D1::Register>),
+
+        /// SD1_D0 功能选择寄存器 (偏移 0xDC)
+        (0x0DC => pub sd1_d0: ReadWrite<u32, FMUX_SD1_D0::Register>),
+
+        /// SD1_CMD 功能选择寄存器 (偏移 0xE0)
+        ///
+        /// **IIC3_SCL 在此引脚上 (功能选择 = 2)**
+        (0x0E0 => pub sd1_cmd: ReadWrite<u32, FMUX_SD1_CMD::Register>),
+
+        /// SD1_CLK 功能选择寄存器 (偏移 0xE4)
+        ///
+        /// **IIC3_SDA 在此引脚上 (功能选择 = 2)**
+        (0x0E4 => pub sd1_clk: ReadWrite<u32, FMUX_SD1_CLK::Register>),
+
+        /// 保留 (偏移 0xE8)
+        (0x0E8 => _reserved6a),
+
+        /// PWM0_BUCK 功能选择寄存器 (偏移 0xEC)
+        (0x0EC => pub pwm0_buck: ReadWrite<u32, FMUX_PWM0_BUCK::Register>),
+
+        /// 保留 (偏移 0xF0-0xF4)
+        (0x0F0 => _reserved6b),
 
         /// ADC1 功能选择寄存器 (偏移 0xF8)
         (0x0F8 => pub adc1: ReadWrite<u32, FMUX_ADC1::Register>),

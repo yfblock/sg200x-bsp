@@ -9,6 +9,7 @@
 //! - `sdmmc`: SD/MMC 控制驱动
 //! - `i2c`: I2C 控制驱动
 //! - `tpu`: TPU (张量处理单元) 驱动
+//! - `pwm`: PWM 控制驱动
 //!
 //! # I2C 使用示例
 //!
@@ -30,12 +31,36 @@
 //! let mut buf = [0u8; 4];
 //! i2c.read(slave_addr, &mut buf).unwrap();
 //! ```
+//!
+//! # PWM 使用示例
+//!
+//! ```rust,ignore
+//! use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmMode, PwmPolarity};
+//!
+//! // 创建 PWM0 控制器驱动实例
+//! let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+//!
+//! // 配置通道 0: 1KHz, 50% 占空比
+//! pwm.configure_channel(
+//!     PwmChannel::Channel0,
+//!     1_000,      // 1KHz 频率
+//!     50,         // 50% 占空比
+//!     PwmPolarity::ActiveHigh,
+//! ).unwrap();
+//!
+//! // 使能 IO 输出并启动
+//! pwm.enable_output(PwmChannel::Channel0);
+//! pwm.start(PwmChannel::Channel0);
+//! ```
 
 #![no_std]
 #![recursion_limit = "512"]
 
 pub mod gpio;
+pub mod i2c;
+pub mod mp;
 pub mod pinmux;
+pub mod pwm;
+pub mod rstc;
 pub mod sdmmc;
 pub mod tpu;
-pub mod i2c;
