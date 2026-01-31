@@ -27,10 +27,10 @@
 //! # 使用示例
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::gpio::{Gpio, GpioPort, Direction, InterruptType};
+//! use sg200x_bsp::gpio::{GPIO, GPIOPort, Direction, InterruptType};
 //!
 //! // 创建 GPIO0 实例
-//! let gpio0 = unsafe { Gpio::new(GpioPort::Gpio0) };
+//! let gpio0 = unsafe { GPIO::new(GPIOPort::GPIO0) };
 //!
 //! // 配置引脚 0 为输出模式
 //! gpio0.set_direction(0, Direction::Output);
@@ -246,28 +246,28 @@ register_structs! {
 
 /// GPIO 端口标识
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GpioPort {
+pub enum GPIOPort {
     /// GPIO0 (GPIOA) - Active Domain
-    Gpio0,
+    GPIO0,
     /// GPIO1 (GPIOB) - Active Domain
-    Gpio1,
+    GPIO1,
     /// GPIO2 (GPIOC) - Active Domain
-    Gpio2,
+    GPIO2,
     /// GPIO3 (GPIOD) - Active Domain
-    Gpio3,
+    GPIO3,
     /// RTCSYS_GPIO - No-die Domain
-    RtcSysGpio,
+    RTCSysGPIO,
 }
 
-impl GpioPort {
+impl GPIOPort {
     /// 获取 GPIO 端口的基地址
     pub const fn base_address(self) -> usize {
         match self {
-            GpioPort::Gpio0 => GPIO0_BASE,
-            GpioPort::Gpio1 => GPIO1_BASE,
-            GpioPort::Gpio2 => GPIO2_BASE,
-            GpioPort::Gpio3 => GPIO3_BASE,
-            GpioPort::RtcSysGpio => RTCSYS_GPIO_BASE,
+            GPIOPort::GPIO0 => GPIO0_BASE,
+            GPIOPort::GPIO1 => GPIO1_BASE,
+            GPIOPort::GPIO2 => GPIO2_BASE,
+            GPIOPort::GPIO3 => GPIO3_BASE,
+            GPIOPort::RTCSysGPIO => RTCSYS_GPIO_BASE,
         }
     }
 }
@@ -302,14 +302,15 @@ pub enum InterruptType {
 /// GPIO 驱动结构体
 ///
 /// 提供对单个 GPIO 端口的访问接口
-pub struct Gpio {
+#[derive(Clone)]
+pub struct GPIO {
     /// GPIO 寄存器组
     regs: &'static GpioRegisters,
     /// GPIO 端口标识
-    port: GpioPort,
+    port: GPIOPort,
 }
 
-impl Gpio {
+impl GPIO {
     /// 创建新的 GPIO 驱动实例
     ///
     /// # 参数
@@ -325,9 +326,9 @@ impl Gpio {
     /// # 示例
     ///
     /// ```rust,ignore
-    /// let gpio0 = unsafe { Gpio::new(GpioPort::Gpio0) };
+    /// let gpio0 = unsafe { GPIO::new(GPIOPort::GPIO0) };
     /// ```
-    pub unsafe fn new(port: GpioPort) -> Self {
+    pub fn new(port: GPIOPort) -> Self {
         unsafe {
             Self {
                 regs: &*(port.base_address() as *const GpioRegisters),
@@ -346,7 +347,7 @@ impl Gpio {
     /// # Safety
     ///
     /// 调用者必须确保基地址有效且可访问
-    pub unsafe fn from_base_address(base: usize, port: GpioPort) -> Self {
+    pub unsafe fn from_base_address(base: usize, port: GPIOPort) -> Self {
         unsafe {
             Self {
                 regs: &*(base as *const GpioRegisters),
@@ -356,7 +357,7 @@ impl Gpio {
     }
 
     /// 获取 GPIO 端口标识
-    pub fn port(&self) -> GpioPort {
+    pub fn port(&self) -> GPIOPort {
         self.port
     }
 
@@ -696,14 +697,14 @@ impl Gpio {
 /// 单个 GPIO 引脚的抽象
 ///
 /// 提供对单个引脚的便捷操作接口
-pub struct GpioPin<'a> {
+pub struct GPIOPin {
     /// GPIO 控制器引用
-    gpio: &'a Gpio,
+    gpio: GPIO,
     /// 引脚编号
     pin: u8,
 }
 
-impl<'a> GpioPin<'a> {
+impl GPIOPin {
     /// 创建新的 GPIO 引脚实例
     ///
     /// # 参数
@@ -714,9 +715,13 @@ impl<'a> GpioPin<'a> {
     /// # Panics
     ///
     /// 如果 `pin >= 32` 则 panic
-    pub fn new(gpio: &'a Gpio, pin: u8) -> Self {
+    pub fn new(gpio: &GPIO, pin: u8) -> Self {
         assert!(pin < 32, "GPIO pin number must be less than 32");
-        Self { gpio, pin }
+        Self { gpio: gpio.clone(), pin }
+    }
+
+    pub fn with_port(port: GPIOPort, pin: u8) -> Self {
+        Self::new(&GPIO::new(port), pin)
     }
 
     /// 获取引脚编号

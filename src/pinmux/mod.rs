@@ -130,7 +130,7 @@ impl Pinmux {
     /// 调用者必须确保:
     /// - 寄存器地址有效且可访问
     /// - 不会创建多个实例导致数据竞争
-    pub unsafe fn new() -> Self {
+    pub fn new() -> Self {
         unsafe {
             Self {
                 fmux: &*(FMUX_BASE as *const FmuxRegisters),
@@ -196,6 +196,12 @@ impl Pinmux {
     /// 获取 IOBLK GRTC 组寄存器的引用
     pub fn ioblk_grtc(&self) -> &IoblkGrtcRegisters {
         self.ioblk_grtc
+    }
+}
+
+impl Default for Pinmux {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -514,5 +520,17 @@ impl Pinmux {
 
     pub fn set_pwm_7(&self) {
         self.fmux.jtag_cpu_tms.write(FMUX_JTAG_CPU_TMS::FSEL::PWM_7);
+    }
+
+    pub fn set_uart1(&self) {
+        self.fmux.jtag_cpu_tms.write(FMUX_JTAG_CPU_TMS::FSEL::UART1_TX);
+        self.fmux.jtag_cpu_tck.write(FMUX_JTAG_CPU_TCK::FSEL::UART1_RX);
+    }
+
+    pub fn set_camera(&self) {
+        self.fmux.pwr_gpio1.write(FMUX_PWR_GPIO1::FSEL::PWR_GPIO_1);
+        self.fmux.pad_mipirx0n.write(FMUX_PAD_MIPIRX0N::FSEL::CAM_MCLK1);
+        self.fmux.pwr_wakeup0.write(FMUX_PWR_WAKEUP0::FSEL::IIC4_SCL);
+        self.fmux.pwr_button1.write(FMUX_PWR_BUTTON1::FSEL::IIC4_SDA);
     }
 }

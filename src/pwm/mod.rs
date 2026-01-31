@@ -153,7 +153,7 @@ impl Pwm {
     ///
     /// # 参数
     /// - `instance`: PWM 实例标识符
-    pub unsafe fn new(instance: PwmInstance) -> Self {
+    pub fn new(instance: PwmInstance) -> Self {
         let base = instance.base_address();
         Self {
             regs: unsafe { &*(base as *const PwmRegisters) },

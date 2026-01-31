@@ -8,6 +8,10 @@
 //! - `gpio`: GPIO 控制驱动
 //! - `sdmmc`: SD/MMC 控制驱动
 //! - `i2c`: I2C 控制驱动
+//! - `camera`: 相机传感器驱动 (GC4653)
+//! - `cif`: 相机接口驱动 (MIPI/LVDS/DVP)
+//! - `mipirx`: MIPI RX 驱动 (MIPI D-PHY/Sub-LVDS/HiSPi)
+//! - `vi`: 视频输入驱动 (BT.656/BT.601/BT.1120/DC)
 //! - `tpu`: TPU (张量处理单元) 驱动
 //! - `pwm`: PWM 控制驱动
 //!
@@ -58,9 +62,13 @@
 
 pub mod gpio;
 pub mod i2c;
+pub mod camera;
+pub mod cif;
+pub mod mipirx;
 pub mod mp;
 pub mod pinmux;
 pub mod pwm;
 pub mod rstc;
 pub mod sdmmc;
 pub mod tpu;
+pub mod vi;

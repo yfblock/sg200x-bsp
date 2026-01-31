@@ -84,10 +84,10 @@ impl I2c {
     ///
     /// # 参数
     /// - `instance`: I2C 实例标识符
-    pub unsafe fn new(instance: I2cInstance) -> Self {
+    pub fn new(instance: I2cInstance) -> Self {
         let base = instance.base_address();
         Self {
-            regs: &*(base as *const I2cRegisters),
+            regs: unsafe { &*(base as *const I2cRegisters) },
             instance,
             speed: I2cSpeed::Fast,
             clock_config: I2cClockConfig::CLK_100MHZ,
@@ -101,7 +101,7 @@ impl I2c {
     /// 调用者必须确保基地址有效且可访问
     pub unsafe fn from_base_address(base: usize, instance: I2cInstance) -> Self {
         Self {
-            regs: &*(base as *const I2cRegisters),
+            regs: unsafe { &*(base as *const I2cRegisters) },
             instance,
             speed: I2cSpeed::Fast,
             clock_config: I2cClockConfig::CLK_100MHZ,
@@ -516,6 +516,7 @@ impl I2c {
             if i == read_len - 1 {
                 cmd += IC_DATA_CMD::STOP::SET;
             }
+            log::info!("read command: {i}");
 
             self.regs.ic_data_cmd.write(cmd);
 
@@ -524,6 +525,7 @@ impl I2c {
 
             // 读取数据
             *byte = self.regs.ic_data_cmd.read(IC_DATA_CMD::DAT) as u8;
+            log::info!("byte: {:#x} next: {:#x}", *byte, self.regs.ic_data_cmd.read(IC_DATA_CMD::DAT));
         }
 
         // 检查错误
