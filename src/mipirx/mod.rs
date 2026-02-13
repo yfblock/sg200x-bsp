@@ -166,6 +166,13 @@ impl MipiRx {
         // 使能 PHY 电源
         self.phy.power_on();
 
+        self.phy.set_lane_clk_invert(LaneId::Lane0, true);
+        self.phy.set_lane_clk_invert(LaneId::Lane1, true);
+        self.phy.set_lane_clk_invert(LaneId::Lane2, true);
+        self.phy.set_lane_clk_invert(LaneId::Lane3, true);
+        self.phy.set_lane_clk_invert(LaneId::Lane4, true);
+        self.phy.set_lane_clk_invert(LaneId::Lane5, true);
+
         // 设置默认 PHY 模式为单端口 4-Lane
         self.phy.set_phy_mode(PhyMode::Mode1C4D);
 

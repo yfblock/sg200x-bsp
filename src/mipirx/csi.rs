@@ -9,7 +9,7 @@ use tock_registers::interfaces::{ReadWriteable, Readable};
 /// CSI 控制器驱动
 pub struct MipiRxCsi {
     /// CSI 寄存器
-    regs: &'static MipiRxCsiRegs,
+    pub regs: &'static MipiRxCsiRegs,
     /// 设备编号
     devno: u8,
 }
@@ -22,8 +22,8 @@ impl MipiRxCsi {
     ///
     /// # 参数
     /// - `devno`: 设备编号 (0 或 1)
-    pub unsafe fn new(devno: u8) -> Option<Self> {
-        let regs = csi_regs(devno as usize)?;
+    pub fn new(devno: u8) -> Option<Self> {
+        let regs = unsafe { csi_regs(devno as usize)? };
         Some(Self { regs, devno })
     }
 
@@ -189,8 +189,7 @@ impl MipiRxCsi {
     /// - `sef_id`: SEF OB ID
     pub fn configure_hdr_ob_id_n0(&self, lef_id: u16, sef_id: u16) {
         self.regs.reg_08.modify(
-            CSI_REG_08::N0_OB_LEF.val(lef_id as u32)
-                + CSI_REG_08::N0_OB_SEF.val(sef_id as u32),
+            CSI_REG_08::N0_OB_LEF.val(lef_id as u32) + CSI_REG_08::N0_OB_SEF.val(sef_id as u32),
         );
     }
 
@@ -245,12 +244,10 @@ impl MipiRxCsi {
     /// - `n1_ob`: n1 SEF2 OB ID
     pub fn configure_hdr_sef2_id(&self, n0_active: u16, n1_active: u16, n0_ob: u16, n1_ob: u16) {
         self.regs.reg_20.modify(
-            CSI_REG_20::N0_SEF2.val(n0_active as u32)
-                + CSI_REG_20::N1_SEF2.val(n1_active as u32),
+            CSI_REG_20::N0_SEF2.val(n0_active as u32) + CSI_REG_20::N1_SEF2.val(n1_active as u32),
         );
         self.regs.reg_24.modify(
-            CSI_REG_24::N0_OB_SEF2.val(n0_ob as u32)
-                + CSI_REG_24::N1_OB_SEF2.val(n1_ob as u32),
+            CSI_REG_24::N0_OB_SEF2.val(n0_ob as u32) + CSI_REG_24::N1_OB_SEF2.val(n1_ob as u32),
         );
     }
 

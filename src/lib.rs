@@ -63,7 +63,6 @@
 pub mod gpio;
 pub mod i2c;
 pub mod camera;
-pub mod cif;
 pub mod mipirx;
 pub mod mp;
 pub mod pinmux;
@@ -71,4 +70,3 @@ pub mod pwm;
 pub mod rstc;
 pub mod sdmmc;
 pub mod tpu;
-pub mod vi;
