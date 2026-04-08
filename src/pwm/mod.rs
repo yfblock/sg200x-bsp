@@ -154,13 +154,18 @@ impl Pwm {
     /// # 参数
     /// - `instance`: PWM 实例标识符
     pub fn new(instance: PwmInstance) -> Self {
+        Self::new_with_offset(instance, 0)
+    }
+
+    pub fn new_with_offset(instance: PwmInstance, offset: usize) -> Self {
         let base = instance.base_address();
         Self {
-            regs: unsafe { &*(base as *const PwmRegisters) },
+            regs: unsafe { &*((base + offset) as *const PwmRegisters) },
             instance,
             clock_source: PwmClockSource::Clk100MHz,
         }
     }
+
 
     /// 从指定基地址创建 PWM 驱动实例
     ///

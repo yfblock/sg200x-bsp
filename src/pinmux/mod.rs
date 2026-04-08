@@ -143,6 +143,27 @@ impl Pinmux {
         }
     }
 
+    /// 创建新的 Pinmux 驱动实例
+    ///
+    /// # Safety
+    ///
+    /// 调用者必须确保:
+    /// - 寄存器地址有效且可访问
+    /// - 不会创建多个实例导致数据竞争
+    pub fn new_with_offset(offset: usize) -> Self {
+        unsafe {
+            Self {
+                fmux: &*((FMUX_BASE + offset) as *const FmuxRegisters),
+                ioblk_g1: &*((IOBLK_G1_BASE + offset) as *const IoblkG1Registers),
+                ioblk_g7: &*((IOBLK_G7_BASE + offset) as *const IoblkG7Registers),
+                ioblk_g10: &*((IOBLK_G10_BASE + offset) as *const IoblkG10Registers),
+                ioblk_g12: &*((IOBLK_G12_BASE + offset) as *const IoblkG12Registers),
+                ioblk_grtc: &*((IOBLK_GRTC_BASE + offset) as *const IoblkGrtcRegisters),
+            }
+        }
+    }
+
+
     /// 从指定基地址创建 Pinmux 驱动实例
     ///
     /// # Safety
