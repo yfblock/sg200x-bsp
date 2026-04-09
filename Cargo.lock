@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "sg200x-bsp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bit-struct",
  "log",
