@@ -548,6 +548,11 @@ impl Pinmux {
         self.fmux.jtag_cpu_tck.write(FMUX_JTAG_CPU_TCK::FSEL::UART1_RX);
     }
 
+    pub fn set_uart2(&self) {
+        self.fmux.pwr_gpio0.write(FMUX_PWR_GPIO0::FSEL::UART2_TX);
+        self.fmux.pwr_gpio1.write(FMUX_PWR_GPIO1::FSEL::UART2_RX);
+    }
+
     pub fn set_camera(&self) {
         self.fmux.pwr_gpio1.write(FMUX_PWR_GPIO1::FSEL::PWR_GPIO_1);
         self.fmux.pad_mipirx0n.write(FMUX_PAD_MIPIRX0N::FSEL::CAM_MCLK1);
