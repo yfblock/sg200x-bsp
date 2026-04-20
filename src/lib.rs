@@ -10,6 +10,7 @@
 //! - `sdmmc`: SD/MMC 控制驱动
 //! - `i2c`: I2C 控制驱动
 //! - `pwm`: PWM 控制驱动
+//! - `usb`: USB 主机栈（DWC2 控制器）+ 类协议（UVC / Mass Storage）
 //!
 //! # I2C 使用示例
 //!
@@ -64,3 +65,4 @@ pub mod pinmux;
 pub mod pwm;
 pub mod rstc;
 pub mod sdmmc;
+pub mod usb;

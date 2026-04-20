@@ -16,3 +16,8 @@ categories = ["embedded", "hardware-support", "no-std"]
 tock-registers = "0.9"
 bit-struct = "0.3.2"
 log = "0.4"
+
+[features]
+default = ["cv182x-host"]
+# CV1812H/SG2002 系列 USB2 PHY/控制器特殊覆盖（`init_*_cv182x` 路径）。
+cv182x-host = []
