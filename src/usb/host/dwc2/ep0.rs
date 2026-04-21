@@ -7,8 +7,8 @@
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
 
-use crate::usb::cache;
 use crate::usb::error::{UsbError, UsbResult};
+use crate::utils::cache;
 use crate::usb::platform;
 use crate::usb::setup;
 use super::mmio;

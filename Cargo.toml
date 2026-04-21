@@ -17,7 +17,18 @@ tock-registers = "0.9"
 bit-struct = "0.3.2"
 log = "0.4"
 
+# ethernet feature 启用后才会引入这两个 crate（DWMAC 网卡所需）。
+axdriver_base = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2", optional = true }
+axdriver_net  = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2", optional = true }
+
 [features]
-default = ["cv182x-host"]
+default = ["cv182x-host", "c906"]
 # CV1812H/SG2002 系列 USB2 PHY/控制器特殊覆盖（`init_*_cv182x` 路径）。
 cv182x-host = []
+# 启用 T-Head C906 非标 D-cache 维护指令（dcache.cva / dcache.iva / dcache.ciall）。
+# 关闭后 `utils::cache` 全部退化为标准 RISC-V fence —— 仅保证内存序，不做 line 级 clean/invalidate；
+# 非 T-Head C906 RISC-V 核（或其它 ISA）务必关掉本 feature，否则会执行未定义的自定义编码。
+c906 = []
+# 启用 SG2002 板载 cvitek-eth (DWMAC + 内部 EPHY) 驱动。
+# 需要 axdriver_base/net trait 与全局 alloc 支持。
+ethernet = ["dep:axdriver_base", "dep:axdriver_net"]

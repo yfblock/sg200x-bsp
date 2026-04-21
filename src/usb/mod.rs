@@ -3,13 +3,13 @@
 //! 公共支持：
 //! - [`error`]：统一 [`error::UsbError`] / [`error::UsbResult`]。
 //! - [`log`]：行缓冲日志，由板级注册回调到 `println!`。
-//! - [`cache`]：DMA 缓存一致性（AArch64 / RISC-V T-Head C906）。
 //! - [`platform`]：DWC2 寄存器虚拟基址 + DMA VA→PA 转换回调。
 //! - [`setup`]：USB 标准 SETUP 包构造器（class 专用包在 [`class::*`] 中）。
+//!
+//! DMA 缓存一致性（粗粒度 clean / invalidate）由 [`crate::utils::cache`] 提供。
 
 pub mod error;
 pub mod log;
-pub mod cache;
 pub mod platform;
 pub mod setup;
 
