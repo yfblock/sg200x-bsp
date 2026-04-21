@@ -11,5 +11,6 @@ pub mod topology;
 
 pub use enumerate::{enumerate_root_port, enumerate_topology_only};
 pub use topology::{
-    enumerate_bus_print_tree, enumerate_bus_print_tree_only, TopologyScanExtras, UvcEnumerated,
+    enumerate_bus_print_tree, enumerate_bus_print_tree_only, MscEnumerated, TopologyScanExtras,
+    UvcEnumerated,
 };

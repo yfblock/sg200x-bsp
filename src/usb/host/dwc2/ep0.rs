@@ -101,11 +101,16 @@ pub fn dma_write_at(off: usize, src: &[u8]) -> UsbResult<()> {
 }
 
 const OFF_EP0: usize = 0;
-pub const DMA_OFF_SECTOR: usize = 64;
-pub const DMA_OFF_CSW: usize = 64 + 512;
-pub const DMA_OFF_CBW: usize = 0;
 /// EP0 小缓冲读（Hub 描述符、配置前缀、`GET_PORT_STATUS`），与 Bulk DMA 区错开。
 const DMA_OFF_SMALL_IO: usize = 256;
+/// MSC Command Block Wrapper（31 字节，对齐到 cache line）。
+pub const DMA_OFF_CBW: usize = 320;
+/// MSC Command Status Wrapper（13 字节，对齐到 cache line）。
+pub const DMA_OFF_CSW: usize = 384;
+/// MSC SCSI 数据区（与 UVC Bulk 区共享：MSC/UVC 互斥使用）。
+pub const DMA_OFF_SECTOR: usize = DMA_OFF_UVC_BULK;
+/// MSC SCSI 数据区最大字节数（与 UVC Bulk 区共享）。
+pub const MSC_SECTOR_DMA_CAP: usize = UVC_BULK_DMA_CAP;
 
 #[inline]
 fn spin_delay(n: u32) {
@@ -255,27 +260,63 @@ fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
 
 unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<HcintSnapshot> {
     let c = channel(ch);
-    ch_wait_disabled(ch)?;
-    ch_halt(ch);
-    c.hcsplt.set(0);
-    c.hcint.set(HCINT_ALL_W1C);
-    c.hctsiz.set(hctsiz);
     let dmap = dma_phys(dma_off as usize);
-    usb_bus_fence_before_dma();
-    c.hcdma.set(dmap);
-    usb_bus_fence_before_dma();
-    c.hcchar.set(hcchar | HCCHAR_CHENA);
-    let st = ch_wait_halted(ch)?;
-    if st.is_set(HCINT::STALL) {
-        return Err(UsbError::Stall);
+
+    // EP0 control 上：NAK = 设备未就绪，自动重试；XACTERR = CRC/PID/babble，
+    // 在 reset 解除后总线还可能不稳定，也允许少量重试。STALL 立即返回。
+    const NAK_RETRIES: u32 = 64;
+    const XACT_RETRIES: u32 = 8;
+    let mut xact_left = XACT_RETRIES;
+    for attempt in 0..=NAK_RETRIES {
+        ch_wait_disabled(ch)?;
+        ch_halt(ch);
+        c.hcsplt.set(0);
+        c.hcint.set(HCINT_ALL_W1C);
+        c.hctsiz.set(hctsiz);
+        usb_bus_fence_before_dma();
+        c.hcdma.set(dmap);
+        usb_bus_fence_before_dma();
+        c.hcchar.set(hcchar | HCCHAR_CHENA);
+        let st = ch_wait_halted(ch)?;
+        if st.is_set(HCINT::STALL) {
+            return Err(UsbError::Stall);
+        }
+        if st.is_set(HCINT::XACTERR) {
+            if xact_left == 0 {
+                crate::usb::log::usb_log_fmt(format_args!(
+                    "USB-XACT EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                    ch, hcchar, hctsiz, dmap, st.get()
+                ));
+                dump_channel_timeout_debug(ch, "ch_xfer XACT exhausted");
+                return Err(UsbError::Protocol("ch xfer error (XACT)"));
+            }
+            xact_left -= 1;
+            // XACTERR 退避更久（让 D+/D- 稳定再试），约 1ms。
+            spin_delay(2_000_000);
+            continue;
+        }
+        if st.is_set(HCINT::NAK) {
+            if attempt == NAK_RETRIES {
+                crate::usb::log::usb_log_fmt(format_args!(
+                    "USB-NAK EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                    ch, hcchar, hctsiz, dmap, st.get()
+                ));
+                return Err(UsbError::Protocol("ch xfer NAK exhausted"));
+            }
+            // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF），这里用粗粒度 spin。
+            spin_delay(200_000);
+            continue;
+        }
+        if !st.is_set(HCINT::XFERCOMPL) {
+            crate::usb::log::usb_log_fmt(format_args!(
+                "USB-CHHLTD-NO-XFER ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                ch, hcchar, hctsiz, dmap, st.get()
+            ));
+            return Err(UsbError::Protocol("CHHLTD without XFERCOMPL"));
+        }
+        return Ok(st);
     }
-    if st.is_set(HCINT::XACTERR) || st.is_set(HCINT::NAK) {
-        return Err(UsbError::Protocol("ch xfer error (NAK/XACT)"));
-    }
-    if !st.is_set(HCINT::XFERCOMPL) {
-        return Err(UsbError::Protocol("CHHLTD without XFERCOMPL"));
-    }
-    Ok(st)
+    unreachable!()
 }
 
 /// 视频 Bulk/Isoch：**NAK 单独返回**（设备尚无帧数据时常见），调用方忙等重试；**不与 EP0 共用**。
@@ -495,6 +536,11 @@ pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
 /// 对 **已寻址** 设备发送 Hub `SET_PORT_FEATURE`（无数据阶段）。
 pub fn hub_set_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
     ep0_control_write_no_data(dev, setup::hub_set_port_feature(port, feature), ep0_mps)
+}
+
+/// 对 **已寻址** Hub 设备发送 `CLEAR_PORT_FEATURE`（清 `C_PORT_*` 变化位）。
+pub fn hub_clear_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
+    ep0_control_write_no_data(dev, setup::hub_clear_port_feature(port, feature), ep0_mps)
 }
 
 /// 控制传输：SETUP + 若干 IN 数据包（DATA1/DATA0 交替）+ STATUS OUT（ZLP，DATA1）。

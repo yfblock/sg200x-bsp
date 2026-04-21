@@ -78,8 +78,36 @@ pub fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
     ]
 }
 
-/// Hub 端口特性：`PORT_RESET`（USB 2.0 hub）。
+/// Hub：`CLEAR_PORT_FEATURE`（`bmRequestType=0x23` class+other，`bRequest=CLEAR_FEATURE`）。
+/// 用来清掉 `C_PORT_CONNECTION` / `C_PORT_RESET` 等"变化位"。
+#[inline]
+pub fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
+    [
+        0x23,
+        0x01, // USB_REQ_CLEAR_FEATURE
+        feature as u8,
+        (feature >> 8) as u8,
+        port as u8,
+        (port >> 8) as u8,
+        0,
+        0,
+    ]
+}
+
+/// Hub 端口特性：`PORT_CONNECTION`（USB 2.0 hub spec §11.24.2）。
+pub const HUB_PORT_FEATURE_CONNECTION: u16 = 0;
+/// Hub 端口特性：`PORT_ENABLE`。
+pub const HUB_PORT_FEATURE_ENABLE: u16 = 1;
+/// Hub 端口特性：`PORT_RESET`。
 pub const HUB_PORT_FEATURE_RESET: u16 = 4;
+/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
+pub const HUB_PORT_FEATURE_POWER: u16 = 8;
+/// Hub 端口特性：`C_PORT_CONNECTION`（端口"连接发生变化"位，CLEAR 用）。
+pub const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
+/// Hub 端口特性：`C_PORT_ENABLE`。
+pub const HUB_PORT_FEATURE_C_ENABLE: u16 = 17;
+/// Hub 端口特性：`C_PORT_RESET`。
+pub const HUB_PORT_FEATURE_C_RESET: u16 = 20;
 
 /// `USB_DT_CONFIGURATION`（`GET_DESCRIPTOR` 高字节）。
 pub const USB_DT_CONFIGURATION: u8 = 2;

@@ -25,11 +25,13 @@ const USB_CLASS_VIDEO: u8 = 0x0e;
 
 const MAX_USB_ADDR: u8 = 127;
 
-/// 拓扑扫描附带的设备线索（当前仅填 UVC 候选）。
+/// 拓扑扫描附带的设备线索（UVC 摄像头 / MSC U 盘等）。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TopologyScanExtras {
     /// 枚举到的首个 **Video(0x0e)** 类功能设备（多为 UVC 摄像头）。
     pub uvc: Option<UvcEnumerated>,
+    /// 枚举到的首个 **Mass Storage(0x08)** 类功能设备（U 盘 / 读卡器）。
+    pub msc: Option<MscEnumerated>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,6 +40,31 @@ pub struct UvcEnumerated {
     pub ep0_mps: u32,
     pub vid: u16,
     pub pid: u16,
+}
+
+/// USB Mass Storage（BOT/BBB）枚举结果：包含设备地址、EP0 MPS、VID/PID、
+/// **MSC 接口号**（首个 `bInterfaceClass=0x08` 的 `bInterfaceNumber`），以及
+/// **Bulk IN/OUT 端点号 + 各自 wMaxPacketSize**（HS=512 / FS=64）。
+///
+/// 拿到后即可调用 [`crate::usb::class::mass_storage::bulk_only_reset`] /
+/// [`crate::usb::class::mass_storage::get_max_lun`]，
+/// 以及上层的 SCSI 命令封装（如 INQUIRY / READ_CAPACITY / READ(10) ...）。
+#[derive(Clone, Copy, Debug)]
+pub struct MscEnumerated {
+    pub addr: u8,
+    pub ep0_mps: u32,
+    pub vid: u16,
+    pub pid: u16,
+    /// MSC 接口号（CBW 的 `bCBWLUN`/`Mass Storage Reset` 等的 `wIndex`）。
+    pub iface_num: u8,
+    /// `bEndpointAddress & 0x7F`（Bulk IN）。0 表示未解析到端点。
+    pub bulk_in_ep: u8,
+    /// Bulk IN 端点 `wMaxPacketSize`（HS=512，FS=64）。
+    pub bulk_in_mps: u16,
+    /// `bEndpointAddress & 0x7F`（Bulk OUT）。0 表示未解析到端点。
+    pub bulk_out_ep: u8,
+    /// Bulk OUT 端点 `wMaxPacketSize`（HS=512，FS=64）。
+    pub bulk_out_mps: u16,
 }
 
 const MAX_HUB_PORTS: u8 = 16;
@@ -62,7 +89,10 @@ impl ScanState {
             msc_ep0_mps: 8,
             msc_addr: 0,
             have_msc: false,
-            extras: TopologyScanExtras { uvc: None },
+            extras: TopologyScanExtras {
+                uvc: None,
+                msc: None,
+            },
         }
     }
 
@@ -123,13 +153,100 @@ fn first_interface_class(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
     Ok(0)
 }
 
-fn hub_number_of_ports(hub_dev: u32, ep0_mps: u32) -> UsbResult<u8> {
+/// 解析配置描述符，定位首个 **MSC 接口（`bInterfaceClass = 0x08`）** 的
+/// `bInterfaceNumber` 与 **同接口下** 的 Bulk IN/OUT 端点号 + `wMaxPacketSize`。
+///
+/// 返回 `(iface_num, bulk_in_ep, bulk_in_mps, bulk_out_ep, bulk_out_mps)`；
+/// 任何端点未找到则对应字段为 `0`。
+fn parse_msc_interface_endpoints(
+    dev: u32,
+    ep0_mps: u32,
+) -> UsbResult<(u8, u8, u16, u8, u16)> {
+    let mut hdr = [0u8; 9];
+    dwc2_ep0::ep0_control_read(
+        dev,
+        setup::get_descriptor_configuration(0, 9),
+        ep0_mps,
+        &mut hdr,
+    )?;
+    if hdr[1] != setup::USB_DT_CONFIGURATION {
+        return Err(UsbError::Protocol("not a configuration descriptor"));
+    }
+    let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
+    if total < 9 || total > 512 {
+        return Err(UsbError::Protocol("bad cfg total length"));
+    }
+
+    let mut buf = [0u8; 512];
+    dwc2_ep0::ep0_control_read(
+        dev,
+        setup::get_descriptor_configuration(0, total as u16),
+        ep0_mps,
+        &mut buf[..total],
+    )?;
+
+    let mut i: usize = 0;
+    let mut in_msc_iface = false;
+    let mut iface_num = 0u8;
+    let mut bin_ep = 0u8;
+    let mut bin_mps = 0u16;
+    let mut bout_ep = 0u8;
+    let mut bout_mps = 0u16;
+    while i + 2 <= total {
+        let bl = buf[i] as usize;
+        if bl < 2 || i + bl > total {
+            break;
+        }
+        let ty = buf[i + 1];
+        if ty == 4 && i + 9 <= total {
+            // INTERFACE descriptor
+            let cls = buf[i + 5];
+            let alt = buf[i + 3];
+            in_msc_iface = cls == USB_CLASS_MSC && alt == 0;
+            if in_msc_iface {
+                iface_num = buf[i + 2];
+            }
+        } else if ty == 5 && in_msc_iface && i + 7 <= total {
+            // ENDPOINT descriptor: bEndpointAddress(1)+bmAttributes(1)+wMaxPacketSize(2)+bInterval(1)
+            let ep_addr = buf[i + 2];
+            let attr = buf[i + 3] & 0x03;
+            let mps = u16::from_le_bytes([buf[i + 4], buf[i + 5]]) & 0x07ff;
+            if attr == 2 {
+                // Bulk
+                if ep_addr & 0x80 != 0 {
+                    if bin_ep == 0 {
+                        bin_ep = ep_addr & 0x7f;
+                        bin_mps = mps;
+                    }
+                } else if bout_ep == 0 {
+                    bout_ep = ep_addr & 0x7f;
+                    bout_mps = mps;
+                }
+            }
+        }
+        i = i.saturating_add(bl);
+    }
+    Ok((iface_num, bin_ep, bin_mps, bout_ep, bout_mps))
+}
+
+/// Hub 描述符关键字段：端口数、`bPwrOn2PwrGood`（2ms 单位的端口上电稳定时间）。
+struct HubInfo {
+    nports: u8,
+    pwr_on_2_pwr_good_ms: u32,
+}
+
+fn hub_info(hub_dev: u32, ep0_mps: u32) -> UsbResult<HubInfo> {
     let mut buf = [0u8; 64];
     dwc2_ep0::ep0_control_read(hub_dev, setup::get_descriptor_hub(64), ep0_mps, &mut buf)?;
-    if buf[0] < 3 || buf[1] != setup::USB_DT_HUB {
+    if buf[0] < 7 || buf[1] != setup::USB_DT_HUB {
         return Err(UsbError::Protocol("invalid hub descriptor"));
     }
-    Ok(buf[2].min(MAX_HUB_PORTS))
+    let nports = buf[2].min(MAX_HUB_PORTS);
+    let pwr_on = u32::from(buf[5]).saturating_mul(2);
+    Ok(HubInfo {
+        nports,
+        pwr_on_2_pwr_good_ms: pwr_on,
+    })
 }
 
 fn hub_port_status_w0(hub_dev: u32, port: u16, ep0_mps: u32) -> UsbResult<u16> {
@@ -141,6 +258,27 @@ fn hub_port_status_w0(hub_dev: u32, port: u16, ep0_mps: u32) -> UsbResult<u16> {
         &mut buf,
     )?;
     Ok(u16::from_le_bytes([buf[0], buf[1]]))
+}
+
+/// 粗粒度毫秒延迟，仅用于 hub 端口上电后稳定（`bPwrOn2PwrGood`）+ 端口 reset 等待。
+/// 1ms ≈ 250_000 spin-loop 在当前 sg2002 配置下经验值（与 ep0 内部 `spin_delay`
+/// 校准的同一档参数：`spin_delay(20_000_000)` ≈ 80ms）。
+fn spin_delay_ms(ms: u32) {
+    let cycles = ms.saturating_mul(250_000);
+    for _ in 0..cycles {
+        core::hint::spin_loop();
+    }
+}
+
+/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`）→ 文字描述。
+fn port_speed_str(status: u16) -> &'static str {
+    let ls = (status >> 9) & 1;
+    let hs = (status >> 10) & 1;
+    match (hs, ls) {
+        (1, _) => "HS",
+        (_, 1) => "LS",
+        _ => "FS",
+    }
 }
 
 /// 在默认地址 **0** 上的设备开始枚举；`parent_hub==0` 且 `port==0` 表示根口。
@@ -181,9 +319,31 @@ fn visit_default_depth(
             hub_addr, ep0_mps
         );
 
-        let nports = hub_number_of_ports(u32::from(hub_addr), ep0_mps)?;
+        let info = hub_info(u32::from(hub_addr), ep0_mps)?;
+        let nports = info.nports;
+        let pwr_good_ms = info.pwr_on_2_pwr_good_ms.max(20); // 给 ≥20ms 富余
         write_indent(&mut w, depth);
-        let _ = writeln!(w, "[USB]   -> Hub descriptor: {} downstream port(s)", nports);
+        let _ = writeln!(
+            w,
+            "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
+            nports, pwr_good_ms
+        );
+
+        // ① 给所有下游端口供电：USB 2.0 spec §11.11.1：hub 上电后端口默认 PowerOff，
+        //    必须由 host 显式 SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
+        for port in 1..=nports {
+            if let Err(e) = dwc2_ep0::hub_set_port_feature(
+                u32::from(hub_addr),
+                u16::from(port),
+                setup::HUB_PORT_FEATURE_POWER,
+                ep0_mps,
+            ) {
+                write_indent(&mut w, depth);
+                let _ = writeln!(w, "[USB]   -> port {} POWER fail: {:?}", port, e);
+            }
+        }
+        // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
+        spin_delay_ms(pwr_good_ms.saturating_add(100));
 
         for port in 1..=nports {
             let status = match hub_port_status_w0(u32::from(hub_addr), u16::from(port), ep0_mps) {
@@ -211,13 +371,70 @@ fn visit_default_depth(
                 continue;
             }
 
-            dwc2_ep0::hub_set_port_feature(
+            // ③ 清 C_PORT_CONNECTION（连接变化位），再 PORT_RESET
+            let _ = dwc2_ep0::hub_clear_port_feature(
+                u32::from(hub_addr),
+                u16::from(port),
+                setup::HUB_PORT_FEATURE_C_CONNECTION,
+                ep0_mps,
+            );
+
+            if let Err(e) = dwc2_ep0::hub_set_port_feature(
                 u32::from(hub_addr),
                 u16::from(port),
                 setup::HUB_PORT_FEATURE_RESET,
                 ep0_mps,
-            )?;
+            ) {
+                write_indent(&mut w, depth);
+                let _ = writeln!(w, "[USB]   -> port {} RESET fail: {:?}", port, e);
+                continue;
+            }
+            // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms；hub 完成 reset 后会自动置 C_PORT_RESET。
             dwc2_ep0::usb_post_hub_port_reset_delay();
+
+            // ④ 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
+            let after = match hub_port_status_w0(u32::from(hub_addr), u16::from(port), ep0_mps) {
+                Ok(s) => s,
+                Err(e) => {
+                    write_indent(&mut w, depth);
+                    let _ = writeln!(
+                        w,
+                        "[USB]   -> port {} after-reset GET_PORT_STATUS: {:?}",
+                        port, e
+                    );
+                    continue;
+                }
+            };
+            let _ = dwc2_ep0::hub_clear_port_feature(
+                u32::from(hub_addr),
+                u16::from(port),
+                setup::HUB_PORT_FEATURE_C_RESET,
+                ep0_mps,
+            );
+            let enabled = (after >> 1) & 1 != 0;
+            let speed = port_speed_str(after);
+            write_indent(&mut w, depth);
+            let _ = writeln!(
+                w,
+                "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
+                port, after, enabled, speed
+            );
+            if !enabled {
+                continue;
+            }
+
+            // ⑤ 速度提示：HS hub 下若挂 FS/LS 设备需要 split transaction
+            //    （HCSPLT 编程），当前 host 通道未实现，无法访问 EP0 → 跳过。
+            if speed != "HS" {
+                write_indent(&mut w, depth);
+                let _ = writeln!(
+                    w,
+                    "[USB]   -> port {} 设备非 HS（{}），HS hub 下 FS/LS 设备需要 split transaction，当前驱动暂不支持，跳过此端口枚举",
+                    port, speed
+                );
+                continue;
+            }
+
             visit_default_depth(depth.saturating_add(1), hub_addr, port, st)?;
         }
         return Ok(());
@@ -241,10 +458,26 @@ fn visit_default_depth(
         // BOT (Bulk-Only Transport) reset 已搬到 [`crate::usb::class::mass_storage`]，
         // 由 caller 拿到设备四元组后再调用；保持 host 拓扑层与 class 协议层解耦。
         st.note_msc(vid, pid, ep0_mps, u32::from(fn_addr));
+        let (iface_num, bin_ep, bin_mps, bout_ep, bout_mps) =
+            parse_msc_interface_endpoints(u32::from(fn_addr), ep0_mps).unwrap_or((0, 0, 0, 0, 0));
+        if st.extras.msc.is_none() {
+            st.extras.msc = Some(MscEnumerated {
+                addr: fn_addr,
+                ep0_mps,
+                vid,
+                pid,
+                iface_num,
+                bulk_in_ep: bin_ep,
+                bulk_in_mps: bin_mps,
+                bulk_out_ep: bout_ep,
+                bulk_out_mps: bout_mps,
+            });
+        }
         write_indent(&mut w, depth);
         let _ = writeln!(
             w,
-            "[USB]   -> Mass Storage candidate (BOT reset deferred to class layer)"
+            "[USB]   -> Mass Storage candidate iface={} BulkIN=ep{}({}) BulkOUT=ep{}({})",
+            iface_num, bin_ep, bin_mps, bout_ep, bout_mps
         );
     }
 

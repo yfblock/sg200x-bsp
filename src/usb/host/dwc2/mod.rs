@@ -20,8 +20,9 @@ pub use controller::{
 pub use ep0::{
     bulk_in, bulk_out, current_uframe, debug_log_ep0_dma_info, dma_copy_out, dma_rx_slice,
     dma_write_at, ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
-    ep0_control_write_no_data, get_device_vid_pid_default_addr, hub_set_port_feature, isoch_in,
+    ep0_control_write_no_data, get_device_vid_pid_default_addr, hub_clear_port_feature,
+    hub_set_port_feature, isoch_in,
     isoch_in_uframe, set_configuration, set_usb_address, usb_post_hub_port_reset_delay,
     usb_post_set_address_delay, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR, DMA_OFF_UVC_BULK,
-    PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP, UVC_BULK_DMA_CAP,
+    MSC_SECTOR_DMA_CAP, PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP, UVC_BULK_DMA_CAP,
 };

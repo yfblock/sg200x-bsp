@@ -223,24 +223,46 @@ pub fn suggested_bulk_mps(hprt: u32) -> u32 {
     }
 }
 
+/// HPRT0 的 W1C（write-1-to-clear）位掩码，read-modify-write 时**必须** mask 掉，
+/// 否则会误把 ENA(2)/ENACHG(3)/CONNDET(1)/OVRCURCHG(5) 当成新写入：
+/// - bit 1 CONNDET (R/W1C)
+/// - bit 2 ENA      (R/W1C — 写 1 = disable port！这是最容易踩的坑)
+/// - bit 3 ENACHG   (R/W1C)
+/// - bit 5 OVRCURCHG(R/W1C)
+///
+/// 与 Linux `drivers/usb/dwc2/hcd.c::dwc2_clear_hprt_intr_bits()` 等价。
+const HPRT0_W1C_MASK: u32 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5);
+
+#[inline]
+fn hprt0_rmw_safe() -> u32 {
+    regs().hprt0.get() & !HPRT0_W1C_MASK
+}
+
 fn port_power_on() {
     let r = regs();
-    let mut w = r.hprt0.get();
+    let mut w = hprt0_rmw_safe();
     w |= 1 << 12; // PWR
-    if w & (1 << 1) != 0 {
-        w |= 1 << 1;
-    }
     r.hprt0.set(w);
 }
 
 fn port_reset_pulse() {
     let r = regs();
+    // USB 2.0 spec TDRSTR (root hub reset) min = 50ms（实测 cv182x 的 PHY chirp K/J
+    // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
+    // 这里给到 ≥60ms 留余量，并保留 PWR；同时**单独**清掉 CONNDET（W1C）。
     let cur = r.hprt0.get();
-    r.hprt0.set(cur | (1 << 12) | (1 << 8));
-    spin_delay(2_000_000); // ~USB reset 10ms 量级：粗粒度忙等
-    let cur2 = r.hprt0.get();
-    r.hprt0.set((cur2 | (1 << 12)) & !(1 << 8));
-    spin_delay(500_000);
+    if cur & (1 << 1) != 0 {
+        // 写 1 清 CONNDET，但避免触碰其它 W1C 位
+        r.hprt0.set((cur & !HPRT0_W1C_MASK) | (1 << 1));
+    }
+    let base = hprt0_rmw_safe() | (1 << 12); // 保留 PWR
+    r.hprt0.set(base | (1 << 8)); // 拉 PRTRST
+    spin_delay(15_000_000); // ~PRTRST 60ms+
+    let base2 = hprt0_rmw_safe() | (1 << 12);
+    r.hprt0.set(base2 & !(1 << 8)); // 解 PRTRST
+    // TRSTRCY：reset 解除到首次 SETUP 之间 ≥10ms，慢 U 盘需 50–100ms 让 PHY 完成
+    // chirp K-J-K-J + 内部 controller 启动。这里给 ~80ms 保守余量。
+    spin_delay(20_000_000);
 }
 
 /// `HPRT0[11:10]` 线路状态（Synopsys：`LNSTS`，用于无 `CONNSTS` 时粗判 D+/D- 是否像有上拉）。
@@ -257,10 +279,10 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
         return Err(UsbError::Hardware("DWC2 base not set (call platform::set_dwc2_base_virt)"));
     }
     let r = regs();
-    let mut w = r.hprt0.get();
-    if w & (1 << 1) != 0 {
-        w |= 1 << 1;
-        r.hprt0.set(w);
+    let cur = r.hprt0.get();
+    if cur & (1 << 1) != 0 {
+        // 写 1 清 CONNDET，避免触碰 ENA/ENACHG/OVRCURCHG 等其它 W1C 位
+        r.hprt0.set((cur & !HPRT0_W1C_MASK) | (1 << 1));
     }
     port_reset_pulse();
     Ok(())
@@ -440,15 +462,32 @@ fn init_gotgctl_otg_host_session_overrides() {
     spin_delay(200_000);
 }
 
-/// UTMI 16-bit、HS 超时校准；保持 `FORCEHOSTMODE`（与 [`force_host_mode`] 一致）。
+/// UTMI 数据宽度按 `GHWCFG4.UTMI_PHY_DATA_WIDTH` 自适配；HS 超时校准；
+/// 保持 `FORCEHOSTMODE`（与 [`force_host_mode`] 一致）。
+///
+/// **PHYIF16 设错是 chirp 失败的关键根因之一**：cv182x 的 PHY 实测为 8-bit UTMI
+/// （vendor U-Boot `usb_gusbcfg = 0x40081400` 中 bit3 = 0 = 8-bit；
+/// vendor Linux 也未显式设 PHYIF16）。如果 IP 报告 8-bit-only 或 programmable，
+/// **必须** 把 PHYIF16 清零，否则 DWC2 与 PHY 的 UTMI 总线宽度不匹配，
+/// chirp K/J 信号无法被正确解码，HPRT0.SPD 永远停在 FS。
 #[cfg(feature = "cv182x-host")]
 fn init_gusbcfg_cv182x_utmi16_hs() {
-    regs().gusbcfg.modify(
-        GUSBCFG::FORCEHOSTMODE::SET
-            + GUSBCFG::ULPI_UTMI_SEL::CLEAR
-            + GUSBCFG::PHYIF16::SET
-            + GUSBCFG::TOUTCAL.val(0x7),
-    );
+    let r = regs();
+    let utmi_w = r.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
+    let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
+    crate::usb::log::usb_log_fmt(format_args!(
+        "USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
+        if want_16bit { 1 } else { 0 }
+    ));
+    let mut field = GUSBCFG::FORCEHOSTMODE::SET
+        + GUSBCFG::ULPI_UTMI_SEL::CLEAR
+        + GUSBCFG::TOUTCAL.val(0x7);
+    if want_16bit {
+        field += GUSBCFG::PHYIF16::SET;
+    } else {
+        field += GUSBCFG::PHYIF16::CLEAR;
+    }
+    r.gusbcfg.modify(field);
 }
 
 #[cfg(feature = "cv182x-host")]

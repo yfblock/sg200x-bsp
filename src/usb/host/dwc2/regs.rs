@@ -62,9 +62,18 @@ register_bitfields![u32,
     pub GHWCFG3 [
         DFIFO_DEPTH OFFSET(16) NUMBITS(16) [],
     ],
-    /// 硬件配置 4（专用 FIFO 标志）。
+    /// 硬件配置 4（专用 FIFO 标志、UTMI PHY 数据宽度）。
     pub GHWCFG4 [
         DED_FIFO_EN OFFSET(25) NUMBITS(1) [],
+        /// `UTMI_PHY_DATA_WIDTH`：bit 14..15
+        ///   0b00 = 8-bit only
+        ///   0b01 = 16-bit only
+        ///   0b10 = 8-bit / 16-bit programmable（由 `GUSBCFG.PHYIF16` 决定）
+        UTMI_PHY_DATA_WIDTH OFFSET(14) NUMBITS(2) [
+            Eight = 0,
+            Sixteen = 1,
+            Programmable = 2,
+        ],
     ],
     /// 动态 FIFO 配置（EP info base）。
     pub GDFIFOCFG [
@@ -205,17 +214,59 @@ register_structs! {
 }
 
 register_bitfields![u32,
-    /// CV182x 片内 USB2 PHY `REG014`（`UTMI_OVERRIDE` 等）。
+    /// CV182x 片内 USB2 PHY `REG014`（UTMI 控制覆盖，与 vendor `platform.c` 字段一致）：
+    /// - `UTMI_OVERRIDE` (bit0)：1 = 软件接管 UTMI 信号；0 = 由 DWC2 接管（host 路径必须为 0）
+    /// - `OPMODE` (bit1..2)：UTMI OPMODE，host 路径为 00 (Normal)
+    /// - `XCVRSEL` (bit3..4)：UTMI XCVRSEL，host 路径为 00 (HS)，01=FS、10=LS、11=FS+LS
+    /// - `TERMSEL` (bit5)：1 = 强制 FS termination（设为 1 会禁掉 HS chirp）
+    /// - `DPPULLDOWN/DMPULLDOWN` (bit6/bit7)：host 模式 PHY 必须给 D+/D- 加下拉，此处为 SW override 使能
+    /// - `UTMI_RESET` (bit8)：UTMI 总线复位
     pub PhyReg014 [
         UTMI_OVERRIDE OFFSET(0) NUMBITS(1) [],
+        OPMODE OFFSET(1) NUMBITS(2) [
+            Normal = 0,
+            NonDriving = 1,
+            DisableBitStuffNRZI = 2,
+        ],
+        XCVRSEL OFFSET(3) NUMBITS(2) [
+            HighSpeed = 0,
+            FullSpeed = 1,
+            LowSpeed = 2,
+            FsLs = 3,
+        ],
+        TERMSEL OFFSET(5) NUMBITS(1) [],
+        DPPULLDOWN OFFSET(6) NUMBITS(1) [],
+        DMPULLDOWN OFFSET(7) NUMBITS(1) [],
+        UTMI_RESET OFFSET(8) NUMBITS(1) [],
     ],
 ];
 
 register_structs! {
-    /// CV182x 片内 USB2 PHY MMIO（仅暴露驱动用到的 `REG014`，其余为 reserved）。
+    /// CV182x 片内 USB2 PHY MMIO（DTS `usb@04340000` 第二段 `reg=<0x03006000 0x58>`）。
+    /// 字段名对齐 vendor Linux `drivers/usb/dwc2/platform.c` 中的 `REGxxx` 宏。
     pub Cv182xUsb2Phy {
-        (0x000 => _reserved000),
+        (0x000 => pub reg000: ReadWrite<u32>),
+        (0x004 => pub reg004: ReadWrite<u32>),
+        (0x008 => pub reg008: ReadWrite<u32>),
+        (0x00c => pub reg00c: ReadWrite<u32>),
+        (0x010 => pub reg010: ReadWrite<u32>),
         (0x014 => pub reg014: ReadWrite<u32, PhyReg014::Register>),
-        (0x018 => @END),
+        (0x018 => pub reg018: ReadWrite<u32>),
+        (0x01c => pub reg01c: ReadWrite<u32>),
+        (0x020 => pub reg020: ReadWrite<u32>),
+        (0x024 => pub reg024: ReadWrite<u32>),
+        (0x028 => pub reg028: ReadWrite<u32>),
+        (0x02c => pub reg02c: ReadWrite<u32>),
+        (0x030 => pub reg030: ReadWrite<u32>),
+        (0x034 => pub reg034: ReadWrite<u32>),
+        (0x038 => pub reg038: ReadWrite<u32>),
+        (0x03c => pub reg03c: ReadWrite<u32>),
+        (0x040 => pub reg040: ReadWrite<u32>),
+        (0x044 => pub reg044: ReadWrite<u32>),
+        (0x048 => pub reg048: ReadWrite<u32>),
+        (0x04c => pub reg04c: ReadWrite<u32>),
+        (0x050 => pub reg050: ReadWrite<u32>),
+        (0x054 => pub reg054: ReadWrite<u32>),
+        (0x058 => @END),
     }
 }
