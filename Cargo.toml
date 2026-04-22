@@ -1,6 +1,6 @@
 [package]
 name = "sg200x-bsp"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["yfblock"]
 description = "Board Support Package (BSP) for SG2002/SG200x series chips, providing hardware abstraction layer drivers for pinmux, GPIO, SD/MMC, and TPU"
@@ -17,10 +17,6 @@ tock-registers = "0.9"
 bit-struct = "0.3.2"
 log = "0.4"
 
-# ethernet feature 启用后才会引入这两个 crate（DWMAC 网卡所需）。
-axdriver_base = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2", optional = true }
-axdriver_net  = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "v0.1.2", optional = true }
-
 [features]
 default = ["cv182x-host", "c906"]
 # CV1812H/SG2002 系列 USB2 PHY/控制器特殊覆盖（`init_*_cv182x` 路径）。
@@ -29,6 +25,21 @@ cv182x-host = []
 # 关闭后 `utils::cache` 全部退化为标准 RISC-V fence —— 仅保证内存序，不做 line 级 clean/invalidate；
 # 非 T-Head C906 RISC-V 核（或其它 ISA）务必关掉本 feature，否则会执行未定义的自定义编码。
 c906 = []
-# 启用 SG2002 板载 cvitek-eth (DWMAC + 内部 EPHY) 驱动。
-# 需要 axdriver_base/net trait 与全局 alloc 支持。
-ethernet = ["dep:axdriver_base", "dep:axdriver_net"]
+# 启用 SG2002 板载 cvitek-eth (DWMAC + 内部 EPHY) **纯硬件**驱动。
+# BSP 只暴露中性的 transmit/receive 接口，**不**直接 impl `axdriver_*` trait；
+# 与 ArceOS 的 `axdriver_net::NetDriverOps` 适配请放到上层 crate
+# （参考 `sg2002-arceos/modules/axdriver/src/cvitek_eth.rs`）。
+# 需要全局 `alloc`（`Vec` + `Box`）。
+ethernet = []
+# 启用 USB Device (Slave/Peripheral) 模式：DWC2 走 ForceDevMode，提供 EP0
+# 状态机 + 描述符表。本 feature 与 host 模式同时编译可能（应用根据需要二
+# 选一调用 init），仅引入 device/* 模块的代码。
+device-mode = []
+# 在 [`device-mode`] 之上构建一个最小 CDC-ACM (USB 虚拟串口) 实现，PC 端会
+# 列出 /dev/ttyACM*。仅供 bring-up / 协议联调验证，不做高级功能（如 break、
+# parity、多端口）。
+device-cdc-acm = ["device-mode"]
+# 调试 USB 主机：在 CV182x bring-up 时显式清掉 `GAHBCFG.DMA_EN`，让 DWC2 走 PIO 路径，
+# 用于排查 DMA 桥/cache 问题。仅 `usb/host/dwc2/controller.rs::init_gahb_dma_cv182x`
+# 检查本 feature；正常使用应**关闭**。
+usb-force-no-dma = []

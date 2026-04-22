@@ -1,24 +1,26 @@
-//! SG2002 / CV1812H 板载 Synopsys DesignWare MAC（DWMAC 3.70a）轮询驱动。
+//! SG2002 / CV1812H 板载 Synopsys DesignWare MAC（DWMAC 3.70a）轮询驱动 —— **纯硬件层**。
 //!
 //! 控制器位于 `0x0407_0000`，自带内部 EPHY；本驱动覆盖：
 //!
 //! - 时钟门控（CLKGEN bit25/26）+ ETH MAC 软复位 + EPHY 软复位
 //! - DMA 软复位、TX/RX 描述符环、DMA bus mode（PBL=8、64 byte stride）
 //! - MDIO bring-up（PHY 软复位 → BMCR 自协商 → 链路状态轮询）
-//! - 实现 [`axdriver_base::BaseDriverOps`] 与 [`axdriver_net::NetDriverOps`]
+//!
+//! 本模块**不再实现** `axdriver_*` 的 trait —— 它只暴露**中性**的 `transmit / receive` API。
+//! 与 ArceOS 的胶水（`BaseDriverOps + NetDriverOps`、`NetBufPool` 等）请放到上层 crate
+//! （例如 `sg2002-arceos/modules/axdriver/src/cvitek_eth.rs`），通过 [`CvitekEthNic`] 的
+//! 公开方法（`transmit / receive / mac_address / can_transmit / can_receive`）做适配，
+//! 让 BSP 可独立用于其它任意 RTOS / bare-metal 工程。
 //!
 //! 所有 GMAC / DMA 寄存器都通过 [`super::regs`] 的 `tock-registers` 视图访问，
 //! 不再有零散的 `read_volatile / write_volatile`。
 
-use alloc::sync::Arc;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{Ordering, fence};
 
-use axdriver_base::{BaseDriverOps, DevError, DevResult, DeviceType};
-use axdriver_net::{EthernetAddress, NetBuf, NetBufBox, NetBufPool, NetBufPtr, NetDriverOps};
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use crate::utils::cache::{dcache_clean_range, dcache_invalidate_range};
 use super::desc::{
     BUF_SIZE, DmaDesc, RDES0_ES, RDES0_FL_MASK, RDES0_FL_SHIFT, RDES0_OWN, RDES1_RBS1_MASK,
     RDES1_RER, RX_RING_SIZE, TDES0_OWN, TDES1_FS, TDES1_IC, TDES1_LS, TDES1_TBS1_MASK, TDES1_TER,
@@ -29,6 +31,7 @@ use super::regs::{
     Addr0High, DmaBusMode, DmaOperation, DmaStatus, Dwc3DmaRegs, Dwc3GmacRegs, FrameFilter,
     MacControl, dma_regs, gmac_regs,
 };
+use crate::utils::cache::{dcache_clean_range, dcache_invalidate_range};
 
 /// SG2002 板载 GMAC 默认 MMIO 基地址（`cvitek,cv1810-eth` DTS 节点 `ethernet@4070000`）。
 pub const ETH_BASE: usize = 0x0407_0000;
@@ -46,16 +49,50 @@ const CLKEN0_ETH_MASK: u32 = (1 << 25) | (1 << 26);
 /// `RstcRegisters::soft_rstn_3` bit0/1：内部 EPHY 复位；写 1 解除复位。
 const SOFT_RSTN3_EPHY_MASK: u32 = (1 << 0) | (1 << 1);
 
-/// SG2002 GMAC + 内部 EPHY 主驱动。
+/// 最小以太帧（不含 CRC）；短帧需要 pad 到此长度。
+const MIN_ETH_FRAME: usize = 60;
+
+/// BSP 内部硬件错误码（与上层 OS 解耦，便于不同 wrapper 自行映射）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EthError {
+    /// 资源暂不可用（无可用 TX 描述符 / 无新 RX 帧）。
+    Again,
+    /// 申请缓冲失败。
+    NoMemory,
+    /// 输入 packet 过大或非法。
+    BadParam,
+}
+
+/// `Result<T, EthError>` 的别名，方便上层 wrapper 引用。
+pub type EthResult<T> = Result<T, EthError>;
+
+/// `BUF_SIZE` 对齐到 64 字节的连续 DMA buffer，确保 cache 维护按行干净。
+#[repr(C, align(64))]
+struct DmaPktBuf([u8; BUF_SIZE]);
+
+impl DmaPktBuf {
+    fn new() -> Self {
+        Self([0u8; BUF_SIZE])
+    }
+}
+
+/// SG2002 GMAC + 内部 EPHY 主驱动 —— **不依赖任何 axdriver crate**。
+///
+/// 调用流程：
+/// 1. [`CvitekEthNic::init`] 完成时钟/复位 → DMA → MDIO → 启动 TX/RX。
+/// 2. 业务侧在轮询循环里：
+///    - 如果 [`Self::can_transmit`] 返回 true，可调用 [`Self::transmit`] 发包；
+///    - 如果 [`Self::can_receive`] 返回 true，调用 [`Self::receive`] 拿到 [`RxToken`]，
+///      读完 `frame()` 后让 token drop 即自动把 buffer 还给 DMA。
 pub struct CvitekEthNic {
     base: usize,
     mac_addr: [u8; 6],
-    tx_pool: Arc<NetBufPool>,
-    rx_pool: Arc<NetBufPool>,
     tx_descs: Vec<DmaDesc>,
     rx_descs: Vec<DmaDesc>,
-    tx_bufs: Vec<Option<NetBufPtr>>,
-    rx_bufs: Vec<Option<NetBufBox>>,
+    /// 每个 TX desc 对应一个静态 cache-line 对齐 buffer，避免上层做 DMA 一致性。
+    tx_bufs: Vec<Box<DmaPktBuf>>,
+    /// 每个 RX desc 对应一个 cache-line 对齐 buffer，DMA 直接写入这里。
+    rx_bufs: Vec<Box<DmaPktBuf>>,
     tx_head: usize,
     tx_tail: usize,
     rx_cur: usize,
@@ -67,6 +104,13 @@ unsafe impl Send for CvitekEthNic {}
 unsafe impl Sync for CvitekEthNic {}
 
 impl CvitekEthNic {
+    /// 软件视角的 TX 队列容量（== 描述符环深度）。
+    pub const TX_QUEUE_SIZE: usize = TX_RING_SIZE;
+    /// 软件视角的 RX 队列容量（== 描述符环深度）。
+    pub const RX_QUEUE_SIZE: usize = RX_RING_SIZE;
+    /// 单帧最大字节数（含 FCS 之前），等同于 DMA buffer 长度。
+    pub const MAX_FRAME_LEN: usize = BUF_SIZE;
+
     #[inline]
     fn gmac(&self) -> &Dwc3GmacRegs {
         unsafe { gmac_regs(self.base) }
@@ -126,10 +170,11 @@ impl CvitekEthNic {
 
     fn setup_tx_ring(&mut self) {
         for i in 0..TX_RING_SIZE {
+            let buf_pa = self.tx_bufs[i].0.as_ptr() as u32;
             let d = &mut self.tx_descs[i];
             d.des0 = 0;
             d.des1 = if i == TX_RING_SIZE - 1 { TDES1_TER } else { 0 };
-            d.des2 = 0;
+            d.des2 = buf_pa;
             d.des3 = 0;
             Self::flush_desc(d);
         }
@@ -137,8 +182,7 @@ impl CvitekEthNic {
 
     fn setup_rx_ring(&mut self) {
         for i in 0..RX_RING_SIZE {
-            let buf = self.rx_pool.alloc_boxed().expect("RX buf alloc");
-            let data_pa = buf.raw_buf().as_ptr() as u32;
+            let data_pa = self.rx_bufs[i].0.as_ptr() as u32;
 
             let d = &mut self.rx_descs[i];
             d.des2 = data_pa;
@@ -153,7 +197,6 @@ impl CvitekEthNic {
             fence(Ordering::Release);
             d.des0 = RDES0_OWN;
             Self::flush_desc(d);
-            self.rx_bufs[i] = Some(buf);
         }
     }
 
@@ -188,10 +231,7 @@ impl CvitekEthNic {
     }
 
     /// 完整 bring-up：时钟/复位 → DMA 软复位 → 描述符环 → MAC 配置 → PHY 协商 → 启动 TX/RX。
-    pub fn init(base: usize) -> DevResult<Self> {
-        let tx_pool = NetBufPool::new(TX_RING_SIZE + 16, BUF_SIZE)?;
-        let rx_pool = NetBufPool::new(RX_RING_SIZE + 16, BUF_SIZE)?;
-
+    pub fn init(base: usize) -> EthResult<Self> {
         let mut tx_descs = Vec::with_capacity(TX_RING_SIZE);
         let mut rx_descs = Vec::with_capacity(RX_RING_SIZE);
         for _ in 0..TX_RING_SIZE {
@@ -201,20 +241,18 @@ impl CvitekEthNic {
             rx_descs.push(DmaDesc::zero());
         }
 
-        let mut tx_bufs: Vec<Option<NetBufPtr>> = Vec::with_capacity(TX_RING_SIZE);
-        let mut rx_bufs: Vec<Option<NetBufBox>> = Vec::with_capacity(RX_RING_SIZE);
+        let mut tx_bufs: Vec<Box<DmaPktBuf>> = Vec::with_capacity(TX_RING_SIZE);
+        let mut rx_bufs: Vec<Box<DmaPktBuf>> = Vec::with_capacity(RX_RING_SIZE);
         for _ in 0..TX_RING_SIZE {
-            tx_bufs.push(None);
+            tx_bufs.push(Box::new(DmaPktBuf::new()));
         }
         for _ in 0..RX_RING_SIZE {
-            rx_bufs.push(None);
+            rx_bufs.push(Box::new(DmaPktBuf::new()));
         }
 
         let mut nic = Self {
             base,
             mac_addr: [0; 6],
-            tx_pool,
-            rx_pool,
             tx_descs,
             rx_descs,
             tx_bufs,
@@ -267,7 +305,7 @@ impl CvitekEthNic {
         nic.set_mac_hw(&nic.mac_addr);
 
         // FrameFilter：促 promiscuous + receive-all + multicast hash 全开，
-        // 让 smoltcp 自行过滤；硬件层只做 CRC。
+        // 让上层协议栈自行过滤；硬件层只做 CRC。
         nic.gmac()
             .frame_filter
             .write(FrameFilter::PR::SET + FrameFilter::RA::SET);
@@ -293,6 +331,10 @@ impl CvitekEthNic {
         // 自协商完整等到 ~5s，避免 host 立即 ARP 时还在协商。
         let mut link_up = false;
         let mut bmcr = 0u16;
+        // 0u16 仅作占位：for 循环里中途 break 或后续 if !link_up 路径都会重新赋值，
+        // 但编译器流分析无法识别，所以这里的初值在某些路径下是被覆盖前不读 ——
+        // 显式标注 unused_assignments 以避免 warning 噪声。
+        #[allow(unused_assignments)]
         let mut bmsr = 0u16;
         let mut lpa = 0u16;
         for i in 0..2500u32 {
@@ -397,85 +439,70 @@ impl CvitekEthNic {
         log::info!("cvitek-eth: initialized OK");
         Ok(nic)
     }
-}
 
-impl BaseDriverOps for CvitekEthNic {
-    fn device_type(&self) -> DeviceType {
-        DeviceType::Net
+    /// 当前驱动持有的 MAC 地址（自协商前从硬件读出，全 0/0xff 时回退到固定值）。
+    pub fn mac_address(&self) -> [u8; 6] {
+        self.mac_addr
     }
 
-    fn device_name(&self) -> &str {
-        "cvitek-eth"
-    }
-}
-
-impl NetDriverOps for CvitekEthNic {
-    fn mac_address(&self) -> EthernetAddress {
-        EthernetAddress(self.mac_addr)
-    }
-
-    fn can_transmit(&self) -> bool {
+    /// 当前 TX 描述符是否空闲（=== 可调用 [`Self::transmit`] 而不会立刻拒收）。
+    pub fn can_transmit(&self) -> bool {
         Self::invalidate_desc(&self.tx_descs[self.tx_head]);
         let des0 = unsafe { core::ptr::read_volatile(&self.tx_descs[self.tx_head].des0) };
         des0 & TDES0_OWN == 0
     }
 
-    fn can_receive(&self) -> bool {
+    /// 当前 RX 描述符是否已经被 DMA 写满（=== [`Self::receive`] 不会返回 [`EthError::Again`]）。
+    pub fn can_receive(&self) -> bool {
         Self::invalidate_desc(&self.rx_descs[self.rx_cur]);
         let des0 = unsafe { core::ptr::read_volatile(&self.rx_descs[self.rx_cur].des0) };
         des0 & RDES0_OWN == 0
     }
 
-    fn rx_queue_size(&self) -> usize {
-        RX_RING_SIZE
-    }
-
-    fn tx_queue_size(&self) -> usize {
-        TX_RING_SIZE
-    }
-
-    fn recycle_rx_buffer(&mut self, rx_buf: NetBufPtr) -> DevResult {
-        unsafe {
-            let _ = NetBuf::from_buf_ptr(rx_buf);
-        }
-        Ok(())
-    }
-
-    fn recycle_tx_buffers(&mut self) -> DevResult {
+    /// 回收已完成的 TX 描述符（不持有上层 buffer，所以只是推进 tx_tail）。
+    /// 调用方一般不用单独调，因为 `transmit()` 内部会先回收一次。
+    pub fn reclaim_tx(&mut self) {
         while self.tx_tail != self.tx_head {
             Self::invalidate_desc(&self.tx_descs[self.tx_tail]);
             let des0 = unsafe { core::ptr::read_volatile(&self.tx_descs[self.tx_tail].des0) };
             if des0 & TDES0_OWN != 0 {
                 break;
             }
-            if let Some(buf) = self.tx_bufs[self.tx_tail].take() {
-                unsafe {
-                    let _ = NetBuf::from_buf_ptr(buf);
-                }
-            }
             self.tx_tail = (self.tx_tail + 1) % TX_RING_SIZE;
         }
-        Ok(())
     }
 
-    fn transmit(&mut self, tx_buf: NetBufPtr) -> DevResult {
-        let idx = self.tx_head;
+    /// 把 `packet` 复制到内部 TX buffer 后启动 DMA。
+    ///
+    /// - 短帧（< 60 字节）会自动 0-pad 到最小以太帧（CRC 由 MAC 自动补 4 字节）。
+    /// - `packet.len() > MAX_FRAME_LEN` 返回 [`EthError::BadParam`]。
+    /// - 没空闲描述符返回 [`EthError::Again`]。
+    pub fn transmit(&mut self, packet: &[u8]) -> EthResult<()> {
+        if packet.len() > Self::MAX_FRAME_LEN {
+            return Err(EthError::BadParam);
+        }
 
+        self.reclaim_tx();
+
+        let idx = self.tx_head;
         Self::invalidate_desc(&self.tx_descs[idx]);
         let des0 = unsafe { core::ptr::read_volatile(&self.tx_descs[idx].des0) };
         if des0 & TDES0_OWN != 0 {
-            return Err(DevError::Again);
+            return Err(EthError::Again);
         }
 
-        let mut len = tx_buf.packet_len();
-        if len < 60 {
-            // pad 到最小以太网帧（CRC 由 MAC 自动补）。
-            let end = tx_buf.packet().as_ptr() as usize + len;
-            unsafe { core::ptr::write_bytes(end as *mut u8, 0, 60 - len) };
-            len = 60;
+        // 拷贝到内部 buffer，按需 pad 到 60 字节。
+        let buf = &mut self.tx_bufs[idx].0;
+        buf[..packet.len()].copy_from_slice(packet);
+        let mut len = packet.len();
+        if len < MIN_ETH_FRAME {
+            for byte in &mut buf[len..MIN_ETH_FRAME] {
+                *byte = 0;
+            }
+            len = MIN_ETH_FRAME;
         }
-        let data = tx_buf.packet().as_ptr() as usize;
-        dcache_clean_range(data, len);
+        let data_pa = buf.as_ptr() as usize;
+        dcache_clean_range(data_pa, len);
 
         let d = &mut self.tx_descs[idx];
 
@@ -485,34 +512,33 @@ impl NetDriverOps for CvitekEthNic {
         }
 
         unsafe {
-            core::ptr::write_volatile(&mut d.des2, data as u32);
+            core::ptr::write_volatile(&mut d.des2, data_pa as u32);
             core::ptr::write_volatile(&mut d.des1, tdes1);
         }
 
         fence(Ordering::Release);
         unsafe { core::ptr::write_volatile(&mut d.des0, TDES0_OWN) };
         Self::flush_desc(d);
-        // 数据缓冲再 clean 一次：上面 mut 写完 desc，可能 evict 了同 cache line 的数据。
-        dcache_clean_range(data, len);
+        // 数据 buffer 再 clean 一次：上面 mut 写 desc 可能 evict 了同 cache line 的数据。
+        dcache_clean_range(data_pa, len);
 
         self.tx_count = self.tx_count.wrapping_add(1);
         if log::log_enabled!(log::Level::Trace) {
-            let raw = tx_buf.packet();
-            let n = raw.len().min(20);
+            let n = packet.len().min(20);
             log::trace!(
                 "cvitek-eth: TX#{} idx={} len={} hdr={:02x?}",
-                self.tx_count, idx, len, &raw[..n]
+                self.tx_count, idx, len, &packet[..n]
             );
         }
 
-        self.tx_bufs[idx] = Some(tx_buf);
         self.tx_head = (self.tx_head + 1) % TX_RING_SIZE;
 
         self.dma().tx_poll.set(1);
         Ok(())
     }
 
-    fn receive(&mut self) -> DevResult<NetBufPtr> {
+    /// 取出当前 RX 帧。返回的 [`RxToken`] 在 drop 时会自动把 buffer 还给 DMA。
+    pub fn receive(&mut self) -> EthResult<RxToken<'_>> {
         let idx = self.rx_cur;
 
         // 软件 ack RI/NIS（写 1 清），DMA 才会继续在下一帧到达时触发。
@@ -526,28 +552,29 @@ impl NetDriverOps for CvitekEthNic {
         let des0 = unsafe { core::ptr::read_volatile(&self.rx_descs[idx].des0) };
 
         if des0 & RDES0_OWN != 0 {
-            return Err(DevError::Again);
+            return Err(EthError::Again);
         }
 
         if des0 & RDES0_ES != 0 {
             // 错误帧：还回 DMA，跳过。
-            unsafe { core::ptr::write_volatile(&mut self.rx_descs[idx].des0, RDES0_OWN) };
-            Self::flush_desc(&self.rx_descs[idx]);
+            self.requeue_rx(idx);
             self.rx_cur = (self.rx_cur + 1) % RX_RING_SIZE;
-            self.dma().rx_poll.set(1);
-            return Err(DevError::Again);
+            return Err(EthError::Again);
         }
 
         let frame_len = ((des0 & RDES0_FL_MASK) >> RDES0_FL_SHIFT) as usize;
         // RDES0.FL 含 4 字节 FCS（CRC），交付上层时去掉。
-        let frame_len = if frame_len >= 4 { frame_len - 4 } else { frame_len };
+        let frame_len = if frame_len >= 4 { frame_len - 4 } else { frame_len }
+            .min(BUF_SIZE);
 
-        let mut buf = self.rx_bufs[idx].take().ok_or(DevError::Again)?;
-        dcache_invalidate_range(buf.raw_buf().as_ptr() as usize, frame_len);
+        // DMA 写完的数据：在交给调用方读之前 invalidate 自己的 buffer。
+        let buf_va = self.rx_bufs[idx].0.as_ptr() as usize;
+        dcache_invalidate_range(buf_va, frame_len);
 
+        self.rx_cur = (self.rx_cur + 1) % RX_RING_SIZE;
         self.rx_count = self.rx_count.wrapping_add(1);
         if log::log_enabled!(log::Level::Trace) {
-            let raw = buf.raw_buf();
+            let raw = &self.rx_bufs[idx].0[..];
             let n = frame_len.min(20);
             log::trace!(
                 "cvitek-eth: RX#{} idx={} len={} hdr={:02x?}",
@@ -555,43 +582,70 @@ impl NetDriverOps for CvitekEthNic {
             );
         }
 
-        buf.set_packet_len(frame_len);
-        let buf_ptr = buf.into_buf_ptr();
+        Ok(RxToken {
+            nic: self,
+            slot: idx,
+            len: frame_len,
+        })
+    }
 
-        // 给 RX desc 补一个新缓冲并交给 DMA。
-        if let Some(new_buf) = self.rx_pool.alloc_boxed() {
-            let pa = new_buf.raw_buf().as_ptr() as u32;
-            let d = &mut self.rx_descs[idx];
-            unsafe {
-                core::ptr::write_volatile(&mut d.des2, pa);
-                let mut rdes1 = (BUF_SIZE as u32).min(RDES1_RBS1_MASK);
-                if idx == RX_RING_SIZE - 1 {
-                    rdes1 |= RDES1_RER;
-                }
-                core::ptr::write_volatile(&mut d.des1, rdes1);
-                core::ptr::write_volatile(&mut d.des3, 0);
-                fence(Ordering::Release);
-                core::ptr::write_volatile(&mut d.des0, RDES0_OWN);
+    /// 把 RX desc 重新交给 DMA，让它在下一轮继续接收。
+    fn requeue_rx(&mut self, slot: usize) {
+        let pa = self.rx_bufs[slot].0.as_ptr() as u32;
+        let d = &mut self.rx_descs[slot];
+        unsafe {
+            core::ptr::write_volatile(&mut d.des2, pa);
+            let mut rdes1 = (BUF_SIZE as u32).min(RDES1_RBS1_MASK);
+            if slot == RX_RING_SIZE - 1 {
+                rdes1 |= RDES1_RER;
             }
-            Self::flush_desc(d);
-            self.rx_bufs[idx] = Some(new_buf);
-        } else {
-            log::warn!("cvitek-eth: RX buf alloc failed");
+            core::ptr::write_volatile(&mut d.des1, rdes1);
+            core::ptr::write_volatile(&mut d.des3, 0);
+            fence(Ordering::Release);
+            core::ptr::write_volatile(&mut d.des0, RDES0_OWN);
         }
-
-        self.rx_cur = (self.rx_cur + 1) % RX_RING_SIZE;
+        Self::flush_desc(d);
         self.dma()
             .status
             .write(DmaStatus::RI::SET + DmaStatus::NIS::SET);
         self.dma().rx_poll.set(1);
-
-        Ok(buf_ptr)
-    }
-
-    fn alloc_tx_buffer(&mut self, size: usize) -> DevResult<NetBufPtr> {
-        let mut buf = self.tx_pool.alloc_boxed().ok_or(DevError::NoMemory)?;
-        buf.set_packet_len(size);
-        Ok(buf.into_buf_ptr())
     }
 }
 
+/// [`CvitekEthNic::receive`] 返回的"借出"的 RX 帧。
+///
+/// 持有期间该 RX slot 的 DMA buffer 借给调用方使用；drop 时 BSP 自动把 desc 重新交给 DMA。
+/// 这样上层 wrapper（例如 axdriver_net 的 `NetDriverOps::receive`）可以把数据复制到自己的
+/// `NetBufPool`，然后让 token 自然 drop，无需显式 release。
+pub struct RxToken<'a> {
+    nic: &'a mut CvitekEthNic,
+    slot: usize,
+    len: usize,
+}
+
+impl<'a> RxToken<'a> {
+    /// 当前 RX 帧的字节切片（不含 FCS）。生命周期与 `RxToken` 绑定。
+    #[inline]
+    pub fn frame(&self) -> &[u8] {
+        &self.nic.rx_bufs[self.slot].0[..self.len]
+    }
+
+    /// RX 帧长度（不含 FCS）。
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// 帮助 Clippy/lint：与标准 `is_empty()` 习惯保持一致。
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<'a> Drop for RxToken<'a> {
+    fn drop(&mut self) {
+        let slot = self.slot;
+        self.nic.requeue_rx(slot);
+    }
+}

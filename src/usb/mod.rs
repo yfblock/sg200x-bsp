@@ -15,6 +15,8 @@ pub mod setup;
 
 pub mod host;
 pub mod class;
+#[cfg(feature = "device-mode")]
+pub mod device;
 
 pub use error::{UsbError, UsbResult};
 pub use log::{LineBufferedUsbLog, set_usb_log_fn};

@@ -26,6 +26,7 @@
 //!
 //! 在 SG2002 上必须开 `c906`；关闭后只能保证内存序，**不能保证** DMA 看到的数据是 cache 之外的最新值。
 
+#[allow(dead_code)]
 const CACHE_LINE: usize = 64;
 
 // 与标准 RISC-V Zicbom 缓存指令冲突时给出明确报错——zicbom 与 C906 自定义指令编码空间重叠，
@@ -61,10 +62,12 @@ unsafe fn dcache_iva(va: usize) {
 
 #[cfg(not(all(target_arch = "riscv64", feature = "c906")))]
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn dcache_cva(_va: usize) {}
 
 #[cfg(not(all(target_arch = "riscv64", feature = "c906")))]
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn dcache_iva(_va: usize) {}
 
 /// 把 `[start, start+size)` 之内的所有缓存行 **clean**（写回到内存），
