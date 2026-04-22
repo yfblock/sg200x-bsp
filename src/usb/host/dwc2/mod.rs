@@ -1,10 +1,13 @@
-//! Synopsys DesignWare USB 2.0 OTG (DWC2) host controller.
+//! Synopsys DesignWare USB 2.0 OTG (DWC2) **主机**侧访问层。
 //!
-//! 子模块组织：
-//! - [`regs`]：`tock-registers` 的全部寄存器/位域/通道结构定义。
-//! - [`mmio`]：基址解析、寄存器视图工厂、CV182x PHY 的离散偏移读写。
-//! - [`controller`]：控制器 bring-up（软复位、Force Host、FIFO、HCFG、根口上电）。
-//! - [`ep0`]：通道 0 控制传输 + 通道 1 Bulk/Isoch 调度。
+//! 约定：**通道 0** 专用于 EP0 控制传输；**通道 1** 专用于 Bulk / Isoch（与部分 IP 在
+//! 单通道上复用控制+批量时的异常行为隔离）。
+//!
+//! 子模块：
+//! - [`regs`]：`tock-registers` 寄存器/位域/主机通道结构。
+//! - [`mmio`]：虚拟基址 → `Dwc2Regs` / `Dwc2HostChannel` 视图；CV182x PHY 离散读。
+//! - [`controller`]：上电、软复位、Force Host、FIFO、`HPRT0` 根口操作。
+//! - [`ep0`]：SETUP/Data/Status 调度、MSC/UVC 共用 DMA 窗。
 
 pub mod regs;
 pub mod mmio;

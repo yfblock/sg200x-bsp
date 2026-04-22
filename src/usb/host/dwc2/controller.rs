@@ -72,6 +72,9 @@ fn spin_delay(iterations: u32) {
 }
 
 /// 读取硬件配置寄存器（上电后通常非零，用于 M0/M1「控制器是否可见」自检）。
+///
+/// # 返回值
+/// `Ok((GHWCFG1, GHWCFG2, GHWCFG3))` 原始寄存器值；基址未设或读全零则返回 [`UsbError::Hardware`]。
 pub unsafe fn dwc2_probe() -> UsbResult<(u32, u32, u32)> {
     if base() == 0 {
         return Err(UsbError::Hardware("DWC2 base not set (call platform::set_dwc2_base_virt)"));
@@ -183,7 +186,10 @@ fn init_hcfg_fs_ls() {
     );
 }
 
-/// 读 `HPRT0`（调试与 M2 端口状态）。
+/// 读取根端口寄存器 `HPRT0` 原始值（调试与端口状态轮询）。
+///
+/// # 返回值
+/// 未设置 MMIO 基址时返回 **0** 且不访问硬件；否则为 `HPRT0` 当前读回值。
 pub unsafe fn dwc2_hprt0_read() -> u32 {
     if base() == 0 {
         return 0;
@@ -191,29 +197,47 @@ pub unsafe fn dwc2_hprt0_read() -> u32 {
     regs().hprt0.get()
 }
 
+/// `HPRT0` **CONNSTS**（bit0）：根口是否检测到设备连接。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 pub fn hprt_connsts(hprt: u32) -> bool {
     hprt & (1 << 0) != 0
 }
 
+/// `HPRT0` **PWR**（bit12）：根口电源是否开启。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 pub fn hprt_pwr(hprt: u32) -> bool {
     hprt & (1 << 12) != 0
 }
 
+/// `HPRT0` **ENA**（bit2）：端口是否已使能。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 #[allow(dead_code)]
 pub fn hprt_enabled(hprt: u32) -> bool {
     hprt & (1 << 2) != 0
 }
 
-/// `HPRT0[18:17]`：0=High、1=Full、2=Low（与 Linux `dwc2` / Synopsys 位定义一致）。
+/// 解析 `HPRT0[18:17]` 端口速度：**0**=HS、**1**=FS、**2**=LS。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 pub fn hprt_speed_bits(hprt: u32) -> u32 {
     (hprt >> 17) & 3
 }
 
-/// 根据端口速度选择 Bulk MPS（与 QEMU `usb-storage` HS/FS 描述符一致）。
+/// 根据根口当前速度给出典型 Bulk `wMaxPacketSize`（HS→512，否则→64）。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 pub fn suggested_bulk_mps(hprt: u32) -> u32 {
     if hprt_speed_bits(hprt) == 0 {
@@ -265,7 +289,10 @@ fn port_reset_pulse() {
     spin_delay(20_000_000);
 }
 
-/// `HPRT0[11:10]` 线路状态（Synopsys：`LNSTS`，用于无 `CONNSTS` 时粗判 D+/D- 是否像有上拉）。
+/// 读取 `HPRT0[11:10]` **LNSTS**（线路状态）。
+///
+/// # 参数
+/// - `hprt`：[`dwc2_hprt0_read`] 的返回值。
 #[inline]
 pub fn hprt_lnsts(hprt: u32) -> u32 {
     (hprt >> 10) & 3
@@ -288,7 +315,10 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     Ok(())
 }
 
-/// 根口与片内 PHY 快照（`CONNSTS==0` 排障：LNSTS、GOTGCTL、PHY014 回读、DWC2 控制状态、PHY 全寄存器）。
+/// 打印根口与片内 PHY 快照（`CONNSTS==0` 时排障用）。
+///
+/// # 参数
+/// - `tag`：日志前缀，便于区分多次 dump。
 pub fn debug_dump_root_port_hw(tag: &str) {
     if base() == 0 {
         return;

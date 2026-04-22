@@ -6,16 +6,17 @@ SG2002/SG200x 系列芯片的板级支持包 (BSP)，提供硬件抽象层驱动
 
 | 模块 | 状态 | 描述 |
 |------|------|------|
-| pinmux | ✅ 完成 | 引脚复用控制驱动 |
+| pinmux | ✅ 完成 | 引脚复用：FMUX 功能选择 + IOBLK 电气配置（含 MIPI 等焊盘的 FMUX 位域） |
 | gpio | ✅ 完成 | GPIO 控制驱动 |
 | sdmmc | ✅ 完成 | SD/MMC 控制驱动 |
 | i2c | ✅ 完成 | I2C 控制驱动 |
 | pwm | ✅ 完成 | PWM 控制驱动 |
 | rstc | ✅ 完成 | 复位控制器驱动 |
 | mp | ✅ 完成 | 多处理器启动驱动 |
-| tpu | 🚧 进行中 | TPU (张量处理单元) 驱动 |
-| spi | 📋 计划中 | SPI 控制驱动 |
-| mipirx | 📋 计划中 | MIPI RX 控制驱动 |
+| dma | ✅ 完成 | Synopsys DesignWare AXI DMA |
+| usb | ✅ 完成 | USB 主机（DWC2）及类协议（UVC / Mass Storage 等） |
+| utils | ✅ 完成 | D-cache / DMA 一致性等通用工具 |
+| ethernet | 🔌 可选 | 启用 feature `ethernet` 时编译板载 cvitek-eth（DWMAC + 内部 EPHY），需 `alloc` |
 
 ## 使用方法
 
@@ -23,20 +24,41 @@ SG2002/SG200x 系列芯片的板级支持包 (BSP)，提供硬件抽象层驱动
 
 ```toml
 [dependencies]
-sg200x-bsp = "0.3"
+sg200x-bsp = "0.5"
 ```
+
+可选功能（在依赖中打开对应 feature，例如 `sg200x-bsp = { version = "0.5", features = ["ethernet"] }`）：
+
+| Feature | 说明 |
+|---------|------|
+| `cv182x-host` | 默认启用；CV1812H/SG2002 USB PHY/控制器相关 bring-up 路径 |
+| `c906` | 默认启用；T-Head C906 非标 D-cache 指令；非 C906 核请关闭 |
+| `ethernet` | 板载以太网驱动（需 `alloc`） |
+| `device-mode` / `device-cdc-acm` | USB Device（含最小 CDC-ACM 示例） |
+| `usb-force-no-dma` | 调试：USB 主机强制 PIO，仅用于排查 DMA/cache |
 
 ## 示例
 
-### GPIO 和 Pinmux
+### Pinmux 与 FMUX
+
+引脚数字功能由 **FMUX**（基地址 `0x0300_1000`，见 `pinmux::FMUX_BASE`）的 **FSEL** 位选择；上拉/下拉等由 **IOBLK** 各组寄存器配置。**I2C3** 的 SCL/SDA 分别复用在 **SD1_CMD** / **SD1_CLK**（FSEL = 2），可用 `Pinmux::setup_iic3_pins()` 一次配置。
 
 ```rust
 #![no_std]
 
-use sg200x_bsp::{gpio, pinmux, sdmmc};
+use sg200x_bsp::pinmux::{Pinmux, PullConfig, FMUX_UART0_TX};
 
-// 使用各模块进行硬件操作
+let pinmux = Pinmux::new();
+
+// 将 UART0_TX 保持为默认 UART 功能，并配置上拉
+pinmux.set_uart0_tx_func(FMUX_UART0_TX::FSEL::UART0_TX);
+pinmux.set_uart0_tx_pull(PullConfig::PullUp);
+
+// I2C3：SD1_CMD → SCL，SD1_CLK → SDA
+pinmux.setup_iic3_pins();
 ```
+
+更底层的寄存器类型（如 `FMUX_SD0_CLK`、`FmuxRegisters`）由 `pinmux` 模块从 `fmux` 子模块再导出，可直接配合 `tock_registers` API 读写。
 
 ### I2C
 

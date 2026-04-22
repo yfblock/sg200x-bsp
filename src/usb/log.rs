@@ -1,23 +1,31 @@
 //! USB 行缓冲日志：通过 `fn(&str)` 回调输出（由应用注册，例如接到 `println!`）。
+//!
+//! 设计为 **无锁单线程** 假设（与整个 USB 栈轮询模型一致）：不在多核并发下
+//! 同时调用 `write_str` / `usb_log_fmt`。
 
 use core::fmt::{self, Write};
 
 /// 单行输出回调（不含换行则由缓冲拼到出现 `\n` 或 [`usb_log_flush_residual`] 时输出）。
 pub type UsbLogFn = fn(&str);
 
+// 全局回调与行缓冲：仅在中断关闭或单核 bring-up 下访问。
 static mut G_LOG: Option<UsbLogFn> = None;
 
 const LOG_CAP: usize = 512;
 static mut LOG_LINE: [u8; LOG_CAP] = [0u8; LOG_CAP];
 static mut LOG_LEN: usize = 0;
 
-/// 注册 USB 栈日志回调（应在枚举前调用）。
+/// 注册 USB 栈日志回调（建议在首次枚举 / 传输前调用一次）。
+///
+/// # 参数
+/// - `f`：收到一整行 UTF-8 文本时调用的函数指针（不含换行，或见 [`LineBufferedUsbLog`] 行为）。
 pub fn set_usb_log_fn(f: UsbLogFn) {
     unsafe {
         G_LOG = Some(f);
     }
 }
 
+/// 把当前累积的一行（无末尾 `\n`）立刻交给回调并清空缓冲。
 fn flush_line_buf() {
     unsafe {
         if LOG_LEN == 0 {
@@ -32,12 +40,15 @@ fn flush_line_buf() {
     }
 }
 
-/// 输出缓冲区中尚未以 `\n` 结尾的残留文本（拓扑扫描结束时应调用）。
+/// 将行缓冲中**尚未**以 `\n` 结尾的残留文本立刻输出（拓扑扫描等结束时应调用）。
 pub fn usb_log_flush_residual() {
     flush_line_buf();
 }
 
-/// 立即输出一行（先清空行缓冲，避免与 [`LineBufferedUsbLog`] 交错）。
+/// 按 `format!` 风格格式化并**立即**输出一行（先刷新行缓冲，避免与 [`LineBufferedUsbLog`] 交错）。
+///
+/// # 参数
+/// - `args`：`format_args!(...)` 生成的格式化参数，勿长期持有。
 pub fn usb_log_fmt(args: fmt::Arguments<'_>) {
     let mut tmp = [0u8; 224];
     struct Buf<'a> {

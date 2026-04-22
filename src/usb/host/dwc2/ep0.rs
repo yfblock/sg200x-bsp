@@ -14,6 +14,7 @@ use crate::usb::setup;
 use super::mmio;
 use super::regs::{Dwc2HostChannel, Dwc2Regs, GHWCFG2, HCCHAR, HCINT, HCTSIZ, HFNUM};
 
+/// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 #[allow(dead_code)]
 pub type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 
@@ -52,6 +53,7 @@ const HCCHAR_MC_SHIFT: u32 = 20;
 // HCINT 写 1 清除：清完整 11 位（含 ACK/NYET 等）。
 const HCINT_ALL_W1C: u32 = 0x7FF;
 
+/// `HCTSIZ.PID` 编码：与 DesignWare 主机通道 `HCTSIZ` 字段一致（SETUP / DATA0/1/2）。
 pub const PID_DATA0: u32 = 0;
 pub const PID_DATA2: u32 = 1;
 pub const PID_DATA1: u32 = 2;
@@ -69,7 +71,7 @@ static mut DMA_BUF: DmaBuf = DmaBuf {
     uvc_bulk: [0; 384 * 1024],
 };
 
-/// `bulk_in` 使用的偏移（在 [`dma_ptr`] 之后）。
+/// `bulk_in` / UVC 使用的 DMA 区起始偏移（紧跟在 1KiB EP0 工作区之后）。
 pub const DMA_OFF_UVC_BULK: usize = 1024;
 /// UVC 视频缓冲容量；前 `UVC_WORK_AREA_BYTES` 用作单微帧 RX 工作区，其余拼接 JPEG。
 /// 720p MJPEG 单帧典型 100-300KB，需要 ≥320KB 的 JPEG 区。
@@ -80,6 +82,10 @@ const DMA_BUF_TOTAL: usize = 1024 + UVC_BULK_DMA_CAP;
 const _: () = assert!(DMA_BUF_TOTAL <= 1024 + 384 * 1024);
 
 /// 安全的只读视图，供 UVC 等解析刚完成的 `bulk_in` 数据（**仅**在 `bulk_in`/cache invalidate 之后调用）。
+///
+/// # 参数
+/// - `off`：相对内部 DMA 窗口起始的字节偏移。
+/// - `len`：要暴露的连续字节长度。
 #[inline]
 pub fn dma_rx_slice(off: usize, len: usize) -> Option<&'static [u8]> {
     if len == 0 || off.checked_add(len)? > DMA_BUF_TOTAL {
@@ -88,7 +94,11 @@ pub fn dma_rx_slice(off: usize, len: usize) -> Option<&'static [u8]> {
     Some(unsafe { core::slice::from_raw_parts(dma_ptr().add(off), len) })
 }
 
-/// 将数据写入 DMA 窗口（CPU 访问，供 UVC 组装 JPEG 等）。
+/// 将数据写入内部 DMA 窗口（CPU 写，供 UVC 组装 JPEG 等；写后需自行 `dcache_clean` 若要给 DMA 读）。
+///
+/// # 参数
+/// - `off`：相对 DMA 窗口起始的偏移。
+/// - `src`：要拷贝进去的源数据。
 pub fn dma_write_at(off: usize, src: &[u8]) -> UsbResult<()> {
     let end = off.checked_add(src.len()).ok_or(UsbError::Protocol("dma write overflow"))?;
     if end > DMA_BUF_TOTAL {
@@ -258,6 +268,8 @@ fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
     Err(UsbError::Timeout)
 }
 
+/// 主机通道单次传输：清中断、写 `HCTSIZ`/`HCDMA`/`HCCHAR`，等待 `CHHLTD`。
+/// EP0 上对 NAK / XACTERR 做有限次重试；STALL 立即返回。
 unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<HcintSnapshot> {
     let c = channel(ch);
     let dmap = dma_phys(dma_off as usize);
@@ -395,7 +407,7 @@ fn next_uframe_oddfrm() -> u32 {
     if (fr & 1) == 0 { HCCHAR_ODDFRM } else { 0 }
 }
 
-/// 当前 USB 微帧编号（HFNUM[15:0]）；每个 microframe (125µs) +1，每 16 位回绕。
+/// 当前 USB 微帧编号（`HFNUM` 低 16 位）；每 microframe (125µs) 递增并回绕。
 /// 用于 UVC 抓帧的时间统计（避免 lib 直接依赖 axhal）。
 #[inline]
 pub fn current_uframe() -> u32 {
@@ -406,6 +418,7 @@ unsafe fn hctsiz(pid: u32, pktcnt: u32, xfersize: u32) -> u32 {
     (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize)).value
 }
 
+/// `SET_ADDRESS` 后粗延时，满足 USB 2.0 在下一事务前使用新地址的要求。
 pub fn usb_post_set_address_delay() {
     spin_delay(20_000_000);
 }
@@ -423,6 +436,12 @@ fn normalize_ep0_mps(b: u8) -> u32 {
     }
 }
 
+/// 控制传输无数据阶段：`SETUP` + `STATUS` IN（零长度）。
+///
+/// # 参数
+/// - `dev`：目标设备 USB 地址（7 位数值，写入主机通道 DevAddr）。
+/// - `setup`：8 字节标准 SETUP 包（小端字段已拼好）。
+/// - `ep0_mps`：该设备 EP0 最大包长（字节，8/16/32/64）。
 pub fn ep0_control_write_no_data(dev: u32, setup: [u8; 8], ep0_mps: u32) -> UsbResult<()> {
     unsafe {
         core::ptr::copy_nonoverlapping(setup.as_ptr(), dma_ptr().add(OFF_EP0), 8);
@@ -442,14 +461,30 @@ pub fn ep0_control_write_no_data(dev: u32, setup: [u8; 8], ep0_mps: u32) -> UsbR
     }
 }
 
+/// 在默认地址 0 上发送 `SET_ADDRESS`。
+///
+/// # 参数
+/// - `addr`：设备新地址，合法 **1..=127**。
+/// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
 pub fn set_usb_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
     ep0_control_write_no_data(0, setup::set_address(addr), ep0_mps)
 }
 
+/// 对已寻址设备发送 `SET_CONFIGURATION`。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `cfg`：`bConfigurationValue`（通常非 0 表示激活配置）。
+/// - `ep0_mps`：该设备 EP0 最大包长。
 pub fn set_configuration(dev: u32, cfg: u8, ep0_mps: u32) -> UsbResult<()> {
     ep0_control_write_no_data(dev, setup::set_configuration(cfg), ep0_mps)
 }
 
+/// `GET_CONFIGURATION`：返回当前 `bConfigurationValue`（单字节）。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `ep0_mps`：该设备 EP0 最大包长。
 #[allow(dead_code)]
 pub fn get_configuration(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
     unsafe {
@@ -488,6 +523,9 @@ pub fn get_configuration(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
 }
 
 /// `GET_DESCRIPTOR(DEVICE, 18)` @ 地址 0；返回 VID、PID、EP0 MPS、`bDeviceClass`。
+///
+/// # 返回值
+/// `(vid, pid, ep0_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
 pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
     unsafe {
         let wlen: u16 = 18;
@@ -533,12 +571,22 @@ pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
     }
 }
 
-/// 对 **已寻址** 设备发送 Hub `SET_PORT_FEATURE`（无数据阶段）。
+/// 对 **已寻址** Hub 发送 `SET_PORT_FEATURE`（无数据阶段）。
+///
+/// # 参数
+/// - `dev`：Hub 的 USB 地址。
+/// - `port`：下游端口号（从 1 开始）。
+/// - `feature`：Hub 端口特性选择子（如 [`crate::usb::setup::HUB_PORT_FEATURE_POWER`]）。
+/// - `ep0_mps`：Hub 的 EP0 最大包长。
 pub fn hub_set_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
     ep0_control_write_no_data(dev, setup::hub_set_port_feature(port, feature), ep0_mps)
 }
 
-/// 对 **已寻址** Hub 设备发送 `CLEAR_PORT_FEATURE`（清 `C_PORT_*` 变化位）。
+/// 对 **已寻址** Hub 发送 `CLEAR_PORT_FEATURE`（清除 `C_PORT_*` 等变化位）。
+///
+/// # 参数
+/// - `dev`、`port`、`ep0_mps`：含义同 [`hub_set_port_feature`]。
+/// - `feature`：要清除的端口特性或 `C_PORT_*` 常量。
 pub fn hub_clear_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
     ep0_control_write_no_data(dev, setup::hub_clear_port_feature(port, feature), ep0_mps)
 }
@@ -546,6 +594,12 @@ pub fn hub_clear_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -
 /// 控制传输：SETUP + 若干 IN 数据包（DATA1/DATA0 交替）+ STATUS OUT（ZLP，DATA1）。
 ///
 /// 数据写入 `out`（总长度 = `out.len()`）。适用于 Hub 描述符、配置前缀、`GET_PORT_STATUS` 等。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `setup_pkt`：8 字节 SETUP（`wLength` 应等于 `out.len()` 的期望读长）。
+/// - `ep0_mps`：EP0 最大包长。
+/// - `out`：接收缓冲区，长度须与 SETUP 中 `wLength` 一致且在 `(0,4096]`。
 pub fn ep0_control_read(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32, out: &mut [u8]) -> UsbResult<()> {
     if out.is_empty() || out.len() > 4096 {
         return Err(UsbError::Protocol("bad ep0 read len"));
@@ -603,6 +657,12 @@ pub fn ep0_control_read(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32, out: &mut [u
 }
 
 /// 控制写：`SETUP` + `DATA` OUT（可多包）+ `STATUS` IN（ZLP）。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `setup_pkt`：8 字节 SETUP（`wLength` 应等于 `data.len()`）。
+/// - `ep0_mps`：EP0 最大包长。
+/// - `data`：OUT 数据阶段负载（最大 4096 字节）。
 pub fn ep0_control_write(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32, data: &[u8]) -> UsbResult<()> {
     if data.len() > 4096 {
         return Err(UsbError::Protocol("bad ep0 write data len"));
@@ -658,7 +718,12 @@ pub fn ep0_control_write(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32, data: &[u8]
     }
 }
 
-/// EP0 控制读：自带数据 IN 与 cache 维护，把 1 字节响应回填给 caller（class 模块用：MSC `GET_MAX_LUN`）。
+/// EP0 控制读：固定读 **1** 字节数据 IN（含 cache 维护），用于 MSC `GET_MAX_LUN` 等。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `setup_pkt`：SETUP（`wLength` 应为 1）。
+/// - `ep0_mps`：EP0 最大包长。
 pub fn ep0_control_read_one_byte(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32) -> UsbResult<u8> {
     unsafe {
         core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
@@ -678,12 +743,22 @@ pub fn ep0_control_read_one_byte(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32) -> 
     }
 }
 
+/// 从内部 DMA 窗口拷贝到 `dst`（**不**做 cache 维护；调用方须已 invalidate 或仅 CPU 写入区）。
+///
+/// # 参数
+/// - `off`：源数据在 DMA 窗口内的起始字节偏移。
+/// - `dst`：目标缓冲区；拷贝长度为 `dst.len()`。
 pub fn dma_copy_out(off: usize, dst: &mut [u8]) {
     unsafe {
         core::ptr::copy_nonoverlapping(dma_ptr().add(off), dst.as_mut_ptr(), dst.len());
     }
 }
 
+/// 计算 `HCTSIZ.PKTCNT`：按 `mps` 分包后的包数（至少为 1）。
+///
+/// # 参数
+/// - `mps`：端点最大包长（字节），为 0 时按 1 包处理。
+/// - `nbytes`：本段传输总字节数。
 fn pktcnt_for(mps: u32, nbytes: u32) -> u32 {
     if mps == 0 {
         return 1;
@@ -691,6 +766,15 @@ fn pktcnt_for(mps: u32, nbytes: u32) -> u32 {
     (nbytes + mps - 1) / mps
 }
 
+/// Bulk OUT：将 `data` 写入内部 DMA 窗口后，经主机通道 1 发出。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址（7 位数值）。
+/// - `ep`：Bulk OUT 端点号（`bEndpointAddress & 0x0F`，不含 `0x80` 方向位）。
+/// - `mps`：该端点 `wMaxPacketSize` 的低 11 位（字节）。
+/// - `pid`：`HCTSIZ` 数据 PID，取 `PID_DATA0` / `PID_DATA1` 等常量。
+/// - `data`：OUT 事务负载（非空，且长度受实现上限约束）。
+/// - `dma_off`：DMA 窗口内放置数据的起始偏移；须能容纳 `data` 且已 `dcache_clean`。
 pub fn bulk_out(dev: u32, ep: u32, mps: u32, pid: u32, data: &[u8], dma_off: usize) -> UsbResult<()> {
     if data.is_empty() || data.len() > 0x7ffff {
         return Err(UsbError::Protocol("bad bulk out len"));
@@ -715,7 +799,15 @@ fn spin_short() {
     spin_delay(64);
 }
 
-/// Bulk IN；NAK 时自动重试（UVC 常见）。返回实际收到字节数。
+/// Bulk IN；遇 NAK 自动重试（UVC 常见）。返回本事务实际收到的字节数。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `ep`：Bulk IN 端点号（`bEndpointAddress & 0x0F`）。
+/// - `mps`：端点 `wMaxPacketSize` 低 11 位。
+/// - `pid`：`HCTSIZ` 数据 PID（`PID_DATA0` / `PID_DATA1`）。
+/// - `len`：本次请求的最大接收长度；亦写入 `HCTSIZ.XFERSIZE`。
+/// - `dma_off`：接收数据落入 DMA 窗口的偏移；成功返回后对应区间已 invalidate。
 pub fn bulk_in(dev: u32, ep: u32, mps: u32, pid: u32, len: usize, dma_off: usize) -> UsbResult<usize> {
     if len == 0 || len > 0x7ffff {
         return Err(UsbError::Protocol("bad bulk in len"));
@@ -752,12 +844,18 @@ pub fn bulk_in(dev: u32, ep: u32, mps: u32, pid: u32, len: usize, dma_off: usize
 
 /// Isoch IN 高带宽：在 **下一微帧** 启动一次通道，最多接收 `mult` 个 USB 事务（每个 ≤ `mps` 字节）。
 ///
-/// `mps_raw` 为端点描述符 `wMaxPacketSize` 原始值（含 bits[12:11] 高带宽倍率）。
+/// `mps_raw` 为端点描述符 `wMaxPacketSize` 原始值（含高两位表示 HS 高带宽倍率）。
 /// 返回本次实际收到的字节数（0 表示设备本微帧无数据 / 0-byte 包）。
 ///
 /// **PID 编码（DWC2）**：单事务 DATA0；双事务 DATA1；三事务 DATA2。
 /// **MC**：写入 `HCCHAR.MC` = `mult`。
 /// **ODDFRM**：根据 `HFNUM` 选择下个微帧的奇偶。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `ep`：Isoch IN 端点号（`bEndpointAddress & 0x0F`）。
+/// - `mps_raw`：端点描述符中的 `wMaxPacketSize` 原值（低 11 位为每事务字节数，bit12..11 为高带宽倍数减一）。
+/// - `dma_off`：本微帧接收缓冲在内部 DMA 窗口中的起始偏移。
 pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbResult<usize> {
     let mps = u32::from(mps_raw & 0x7ff);
     let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
@@ -820,7 +918,14 @@ pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbRe
     }
 }
 
-/// 兼容旧 API：保留单事务 isoch_in（仅供调试，非高带宽）。
+/// 兼容旧 API：单事务 Isoch IN（仅供调试，非高带宽）。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `ep`：Isoch IN 端点号。
+/// - `mps`：单包最大字节数（与端点 `wMaxPacketSize` 一致）。
+/// - `len`：本次读取长度，须 **≤ `mps`** 且非零。
+/// - `dma_off`：DMA 窗口内接收偏移。
 #[allow(dead_code)]
 pub fn isoch_in(dev: u32, ep: u32, mps: u32, len: usize, dma_off: usize) -> UsbResult<usize> {
     if len == 0 || len > 0x7ffff || len > mps as usize {

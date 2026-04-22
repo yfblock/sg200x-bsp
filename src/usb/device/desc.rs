@@ -47,6 +47,13 @@ pub const REQ_RCPT_OTHER: u8 = 3;
 /// 把 ASCII 串编码为 USB string descriptor（UTF-16LE，前缀 `bLength + DT_STRING`）。
 ///
 /// 写入 `dst` 头部的字节数从返回值取（≤ `dst.len()`）。
+///
+/// # 参数
+/// - `s`：要编码的 UTF-8 文本（仅 BMP 平面字符，超长则截断）。
+/// - `dst`：输出缓冲区；前 2 字节写入后会被设为 `bLength` 与 `DT_STRING`。
+///
+/// # 返回值
+/// 实际写入的字节数（含 2 字节头）。
 pub fn encode_string_descriptor(s: &str, dst: &mut [u8]) -> usize {
     let mut n = 2usize;
     for ch in s.chars() {
@@ -71,7 +78,11 @@ pub fn encode_string_descriptor(s: &str, dst: &mut [u8]) -> usize {
 /// `LANGID = English (US) 0x0409` 的 string descriptor 0。
 pub const STRING0_EN_US: [u8; 4] = [4, DT_STRING, 0x09, 0x04];
 
-/// 端点地址：`dir_in=true` 时高位置 1。
+/// 组合 USB 端点地址字节（设备描述符 / 端点描述符中的 `bEndpointAddress`）。
+///
+/// # 参数
+/// - `num`：端点号，仅低 4 位有效（1..=15 等，视控制器而定）。
+/// - `dir_in`：`true` 表示 IN 端点（主机读设备），地址 bit7 置 1；`false` 为 OUT。
 #[inline]
 pub const fn ep_addr(num: u8, dir_in: bool) -> u8 {
     (num & 0x0f) | if dir_in { 0x80 } else { 0 }

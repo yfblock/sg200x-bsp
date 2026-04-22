@@ -16,20 +16,29 @@
 //!
 //! # 使用示例
 //!
+//! 本模块按外设/信号提供 **set_xxx_func** / **get_xxx_func** 等封装，没有统一的 `set_function`。
+//! 具体可选功能值见各 **`FMUX_*::FSEL`** 枚举及 [`FmuxRegisters`]；未封装的引脚可通过
+//! [`Pinmux::fmux`]、[`Pinmux::ioblk_g1`] 等方法拿到寄存器块后自行读写。
+//!
 //! ```rust,ignore
-//! use sg200x_bsp::pinmux::{Pinmux, PinFunction, PullConfig, DriveStrength};
+//! use sg200x_bsp::pinmux::{Pinmux, PullConfig, FMUX_SD0_CLK, FMUX_UART0_TX};
 //!
-//! let pinmux = unsafe { Pinmux::new() };
+//! let pinmux = Pinmux::new();
 //!
-//! // 将 SD0_CLK 引脚配置为 GPIO 功能
-//! pinmux.set_function(PinFunction::Sd0Clk, 3); // 3 = XGPIOA[7]
+//! // SD0_CLK → XGPIOA[7]
+//! pinmux.set_sd0_clk_func(FMUX_SD0_CLK::FSEL::XGPIOA_7);
 //!
-//! // 配置引脚的上拉电阻
-//! pinmux.set_pull(PinFunction::Sd0Clk, PullConfig::PullUp);
-//!
-//! // 设置驱动强度
-//! pinmux.set_drive_strength(PinFunction::Sd0Clk, DriveStrength::Level2);
+//! // UART0_TX：功能 + 上拉（对部分信号有组合封装）
+//! pinmux.set_uart0_tx_func(FMUX_UART0_TX::FSEL::UART0_TX);
+//! pinmux.set_uart0_tx_pull(PullConfig::PullUp);
 //! ```
+//!
+//! # `set_<信号>_func` / `get_<信号>_func` 参数约定
+//!
+//! - **`func`**（`set_*_func`）：要写入 FMUX 的目标功能，类型为对应 `FMUX_*::FSEL::Value`，
+//!   即寄存器 **FSEL** 字段的枚举取值（数字外设/GPIO 等）。
+//! - **返回值**（`get_*_func`）：当前 **FSEL** 的原始 `u32` 值（通常 0..8，具体含义见各 `FMUX_*` 枚举）。
+//! - **`pull`**（如 `set_uart0_tx_pull`）：[`PullConfig`]，仅作用于 IOBLK 电气属性，不改变 FMUX 功能选择。
 
 mod fmux;
 mod ioblk;

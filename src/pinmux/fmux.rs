@@ -1,9 +1,20 @@
-//! FMUX (Function Mux) 寄存器定义
+//! FMUX（Function Mux，功能复用）寄存器定义
 //!
-//! FMUX 寄存器用于选择每个引脚的功能模式。
-//! 基地址: 0x0300_1000
+//! 本文件用 [`tock_registers`] 描述 SG2002 片上 FMUX：为每个与焊盘/外设相连的信号提供独立
+//! 的 32 位寄存器，通过低 3 位 **FSEL** 选择数字外设功能。枚举中未列出的编码可能为保留或未
+//! 定义，请以芯片数据手册为准。
 //!
-//! 每个引脚有一个 32 位寄存器，低 3 位用于功能选择 (最多 8 种功能)。
+//! # 与 `pinmux` 的关系
+//!
+//! - **FMUX**（本文件，基地址为 [`crate::pinmux::FMUX_BASE`] `0x0300_1000`）：功能选择。
+//! - **IOBLK**（`ioblk.rs`）：上拉/下拉、驱动强度等，常与 FMUX 一起配置。
+//!
+//! # 常见注意点
+//!
+//! - **I2C3**：`IIC3_SCL` / `IIC3_SDA` 分别映射在 **SD1_CMD** / **SD1_CLK** 上，FSEL 均为
+//!   `2`；驱动侧可用 [`crate::pinmux::Pinmux::setup_iic3_pins`]。
+//! - **SD1 相关寄存器**：焊盘电气属性由 IOBLK 的 **GRTC** 组配置，但对应的功能选择寄存器
+//!   仍在本 FMUX 映射内（约 `0xD0` 起，见 [`FmuxRegisters`]）。
 
 use tock_registers::{register_bitfields, register_structs, registers::ReadWrite};
 
@@ -1112,8 +1123,9 @@ register_bitfields! [
     ],
 
     // ========================================================================
-    // SD1 引脚功能选择 (GRTC 组)
-    // 注意: IIC3 在 SD1_CMD (SCL) 和 SD1_CLK (SDA) 上
+    // SD1 域引脚的 FMUX 项（电气特性在 IOBLK GRTC，功能选择仍在本地址映射）
+    //
+    // I2C3：SCL → SD1_CMD，SDA → SD1_CLK，FSEL 均为 2（见下方 FMUX_SD1_CMD / FMUX_SD1_CLK）。
     // ========================================================================
 
     /// SD1_D3 功能选择 (Pin 51, 偏移 0xD0)
@@ -1521,7 +1533,7 @@ register_structs! {
         /// MUX_SPI1_SCK 功能选择寄存器 (偏移 0x120)
         (0x120 => pub mux_spi1_sck: ReadWrite<u32, FMUX_MUX_SPI1_SCK::Register>),
 
-        /// 保留 (偏移 0x124-0x128)
+        /// 保留 (偏移 0x124-0x127)
         (0x124 => _reserved9),
 
         /// PAD_ETH_TXP 功能选择寄存器 (偏移 0x128)

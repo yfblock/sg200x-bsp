@@ -24,7 +24,10 @@ use crate::usb::host::dwc2::ep0::{
 };
 use crate::usb::host::MscEnumerated;
 
-/// USB MSC `Bulk-Only Mass Storage Reset`（`bmRequestType=0x21`，`bRequest=0xFF`）。
+/// USB MSC `Bulk-Only Mass Storage Reset`（`bmRequestType=0x21`，`bRequest=0xFF`）的 SETUP 字节。
+///
+/// # 参数
+/// - `interface`：MSC 接口号，填入 SETUP 的 `wIndex`（低字节为接口号）。
 #[inline]
 pub fn mass_storage_reset_setup(interface: u16) -> [u8; 8] {
     [
@@ -39,7 +42,10 @@ pub fn mass_storage_reset_setup(interface: u16) -> [u8; 8] {
     ]
 }
 
-/// `GET_MAX_LUN`（`bmRequestType=0xA1`，`bRequest=0xFE`，`wLength=1`）。
+/// `GET_MAX_LUN`（`bmRequestType=0xA1`，`bRequest=0xFE`，`wLength=1`）的 SETUP 字节。
+///
+/// # 参数
+/// - `interface`：MSC 接口号，对应 SETUP 的 `wIndex`。
 #[inline]
 pub fn get_max_lun_setup(interface: u16) -> [u8; 8] {
     [
@@ -55,11 +61,22 @@ pub fn get_max_lun_setup(interface: u16) -> [u8; 8] {
 }
 
 /// 对已寻址 MSC 设备发出 `Bulk-Only Mass Storage Reset`（无数据阶段）。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址（7 位数值，与主机通道 `HCCHAR` 中 DevAddr 一致）。
+/// - `interface`：MSC 接口号（`wIndex`）。
+/// - `ep0_mps`：该设备控制端点 0 的最大包长（字节，来自设备描述符）。
 pub fn bulk_only_reset(dev: u32, interface: u16, ep0_mps: u32) -> UsbResult<()> {
     ep0::ep0_control_write_no_data(dev, mass_storage_reset_setup(interface), ep0_mps)
 }
 
-/// 对已寻址 MSC 设备读取 `GET_MAX_LUN`，返回 `bMaxLun`（多 LUN 设备使用）。
+/// 对已寻址 MSC 设备执行 `GET_MAX_LUN`，返回 `bMaxLun`（多 LUN 设备使用）。
+///
+/// # 参数
+/// - `dev`、`interface`、`ep0_mps`：含义同 [`bulk_only_reset`]。
+///
+/// # 返回值
+/// `bMaxLun`：最大 LUN 编号（逻辑单元数 = `bMaxLun + 1`）。
 pub fn get_max_lun(dev: u32, interface: u16, ep0_mps: u32) -> UsbResult<u8> {
     ep0::ep0_control_read_one_byte(dev, get_max_lun_setup(interface), ep0_mps)
 }
@@ -99,7 +116,14 @@ pub struct MscDevice {
 }
 
 impl MscDevice {
-    /// 直接由参数构造（手工传入端点号 / MPS）。
+    /// 由枚举或手工参数构造 MSC 句柄。
+    ///
+    /// # 参数
+    /// - `addr`：设备 USB 地址（7 位数值）。
+    /// - `iface`：MSC 接口号（CBW/类请求 `wIndex`）。
+    /// - `ep0_mps`：控制端点 0 最大包长。
+    /// - `bulk_in_ep` / `bulk_out_ep`：Bulk 端点号（**不含**方向位 `0x80`，与描述符 `bEndpointAddress & 0x0F` 一致）。
+    /// - `bulk_in_mps` / `bulk_out_mps`：对应 Bulk 端点 `wMaxPacketSize` 低 11 位（HS 常为 512，FS 为 64）。
     pub fn new(
         addr: u32,
         iface: u8,

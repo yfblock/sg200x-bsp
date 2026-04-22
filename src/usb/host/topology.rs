@@ -130,6 +130,7 @@ fn write_indent<W: Write>(w: &mut W, depth: u8) {
     }
 }
 
+/// 读配置描述符前 64 字节，返回首个 **INTERFACE** 描述符的 `bInterfaceClass`（无则 0）。
 fn first_interface_class(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
     dwc2_ep0::ep0_control_read(
@@ -281,7 +282,13 @@ fn port_speed_str(status: u16) -> &'static str {
     }
 }
 
-/// 在默认地址 **0** 上的设备开始枚举；`parent_hub==0` 且 `port==0` 表示根口。
+/// 在默认地址 **0** 上枚举一台设备：`SET_ADDRESS` → `SET_CONFIGURATION` → 打印信息。
+///
+/// - 若为 **Hub**：分配地址、读 Hub 描述符、给各端口上电、`PORT_RESET` 后递归
+///   [`visit_default_depth`]（仅支持下游 **HS** 设备，FS/LS 会跳过并打日志）。
+/// - 若为 **功能设备**：把 MSC / UVC 候选写入 [`TopologyScanExtras`]。
+///
+/// `parent_hub==0` 且 `port_on_hub==0` 表示根口直连。
 fn visit_default_depth(
     depth: u8,
     parent_hub: u8,
@@ -499,7 +506,11 @@ fn visit_default_depth(
     Ok(())
 }
 
-/// 打印总线拓扑并返回 Mass Storage 设备信息（与旧 `enumerate_root_port` ABI 一致）。
+/// 打印总线拓扑并返回首个 Mass Storage 设备信息（与 [`crate::usb::host::enumerate::enumerate_root_port`] 返回类型一致）。
+///
+/// # 返回值
+/// - `Ok((vid, pid, ep0_mps, dev_addr))`：`dev_addr` 为设备 USB 地址（7 位，数值形式）。
+/// - `Err(Protocol(...))`：拓扑中未发现 MSC。
 pub fn enumerate_bus_print_tree() -> UsbResult<(u16, u16, u32, u32)> {
     let mut w = LineBufferedUsbLog;
     let _ = writeln!(
@@ -519,6 +530,9 @@ pub fn enumerate_bus_print_tree() -> UsbResult<(u16, u16, u32, u32)> {
 }
 
 /// 仅递归枚举并打印拓扑，**不要求**连接 Mass Storage。
+///
+/// # 返回值
+/// [`TopologyScanExtras`]：发现的 UVC / MSC 等候选（字段可能仍为 `None`）。
 pub fn enumerate_bus_print_tree_only() -> UsbResult<TopologyScanExtras> {
     let mut w = LineBufferedUsbLog;
     let _ = writeln!(

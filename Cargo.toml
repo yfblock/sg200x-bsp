@@ -1,6 +1,6 @@
 [package]
 name = "sg200x-bsp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 authors = ["yfblock"]
 description = "Board Support Package (BSP) for SG2002/SG200x series chips, providing hardware abstraction layer drivers for pinmux, GPIO, SD/MMC, and TPU"

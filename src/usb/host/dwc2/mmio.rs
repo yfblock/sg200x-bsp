@@ -7,17 +7,30 @@ use crate::usb::platform;
 use super::regs::{Cv182xUsb2Phy, Dwc2HostChannel, Dwc2Regs, DWC2_MAX_HOST_CHANNELS};
 
 /// 读取 32-bit MMIO（仅 PHY/调试转储用，DWC2 主寄存器请用 [`dwc2_regs`]）。
+///
+/// # 参数
+/// - `addr`：对齐的 32 位寄存器虚拟地址。
 #[inline(always)]
 pub unsafe fn read32(addr: usize) -> u32 {
     unsafe { read_volatile(addr as *const u32) }
 }
 
 /// 写 32-bit MMIO（仅 PHY/调试转储用，DWC2 主寄存器请用 [`dwc2_regs`]）。
+///
+/// # 参数
+/// - `addr`：对齐的 32 位寄存器虚拟地址。
+/// - `val`：要写入的完整 32 位值。
 #[inline(always)]
 pub unsafe fn write32(addr: usize, val: u32) {
     unsafe { write_volatile(addr as *mut u32, val) }
 }
 
+/// 读-改-写：`addr = (old & !mask) | (bits & mask)`。
+///
+/// # 参数
+/// - `addr`：寄存器虚拟地址。
+/// - `mask`：允许被覆盖的位（1 表示该位可取 `bits` 中对应值）。
+/// - `bits`：新写入数据（仅 `mask` 为 1 的位生效）。
 #[allow(dead_code)]
 #[inline(always)]
 pub unsafe fn modify32(addr: usize, mask: u32, bits: u32) {
@@ -25,7 +38,10 @@ pub unsafe fn modify32(addr: usize, mask: u32, bits: u32) {
     unsafe { write32(addr, (v & !mask) | (bits & mask)) }
 }
 
-/// 取 DWC2 全局寄存器视图（基址未设置时返回 `None`）。
+/// 取 DWC2 全局寄存器视图。
+///
+/// # 返回值
+/// 未设置 MMIO 基址（或为 0）时返回 `None`。
 #[inline]
 pub fn dwc2_regs() -> Option<&'static Dwc2Regs> {
     let base = platform::dwc2_base_virt();
@@ -35,7 +51,13 @@ pub fn dwc2_regs() -> Option<&'static Dwc2Regs> {
     Some(unsafe { &*(base as *const Dwc2Regs) })
 }
 
-/// 取第 `ch` 号主机通道寄存器（`ch >= 16` 或基址未设置时返回 `None`）。
+/// 取第 `ch` 号主机通道寄存器块。
+///
+/// # 参数
+/// - `ch`：主机通道索引；本栈约定 **0** 为 EP0 控制、**1** 为 Bulk/Isoch。
+///
+/// # 返回值
+/// `ch` 超出 IP 支持数量或基址未设置时返回 `None`。
 #[inline]
 pub fn dwc2_channel(ch: u32) -> Option<&'static Dwc2HostChannel> {
     let regs = dwc2_regs()?;

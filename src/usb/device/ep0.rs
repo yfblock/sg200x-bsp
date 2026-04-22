@@ -672,8 +672,10 @@ impl Default for Ep0Service {
 
 /// 帮 class 配置 IN bulk endpoint（buffer DMA 模式）。
 ///
-/// `ep_num` 1..=15，`mps` 高速 bulk=512 / 全速=64，`tx_fifo_num` 与 [`super::controller`]
-/// 中分配的 DIEPTXFn 槽位一致（默认 1）。
+/// # 参数
+/// - `ep_num`：设备端点号，**1..15**（非 0；且须小于 IP 支持的最大端点数）。
+/// - `mps`：该 IN 端点最大包长；HS bulk 典型 512，FS 典型 64（写入 `DIEPCTL.MPS` 低 11 位）。
+/// - `tx_fifo_num`：非周期性 TX FIFO 槽位号，须与 [`super::controller`] 里 `DIEPTXF*` 划分一致（CDC 示例常为 1）。
 pub fn configure_bulk_in_ep(ep_num: u8, mps: u32, tx_fifo_num: u32) -> UsbResult<()> {
     let ep = ep_num as usize;
     if ep == 0 || ep >= crate::usb::host::dwc2::regs::DWC2_MAX_DEV_ENDPOINTS {
@@ -694,8 +696,13 @@ pub fn configure_bulk_in_ep(ep_num: u8, mps: u32, tx_fifo_num: u32) -> UsbResult
     Ok(())
 }
 
-/// 帮 class 配置 OUT bulk endpoint（buffer DMA 模式）。调用方在 [`UsbDeviceClass::poll`]
-/// 中调用 [`prime_bulk_out`] 实际开始接收。
+/// 帮 class 配置 OUT bulk endpoint（buffer DMA 模式）。
+///
+/// 配置完成后需在 [`UsbDeviceClass::poll`] 等路径调用 [`prime_bulk_out`] 才会真正收数。
+///
+/// # 参数
+/// - `ep_num`：OUT 端点号，**1..15**。
+/// - `mps`：该 OUT 端点最大包长（`DOEPCTL.MPS`）。
 pub fn configure_bulk_out_ep(ep_num: u8, mps: u32) -> UsbResult<()> {
     let ep = ep_num as usize;
     if ep == 0 || ep >= crate::usb::host::dwc2::regs::DWC2_MAX_DEV_ENDPOINTS {
@@ -714,7 +721,12 @@ pub fn configure_bulk_out_ep(ep_num: u8, mps: u32) -> UsbResult<()> {
     Ok(())
 }
 
-/// 配置 INTERRUPT IN endpoint（CDC ACM Notification EP 等）。
+/// 配置 INTERRUPT IN 类端点（如 CDC-ACM 的 Notification EP）。
+///
+/// # 参数
+/// - `ep_num`：IN 端点号，**1..15**。
+/// - `mps`：中断传输最大包长（通常 8..64）。
+/// - `tx_fifo_num`：专用 TX FIFO 编号，与控制器 FIFO 划分一致。
 pub fn configure_intr_in_ep(ep_num: u8, mps: u32, tx_fifo_num: u32) -> UsbResult<()> {
     let ep = ep_num as usize;
     if ep == 0 || ep >= crate::usb::host::dwc2::regs::DWC2_MAX_DEV_ENDPOINTS {
@@ -734,11 +746,16 @@ pub fn configure_intr_in_ep(ep_num: u8, mps: u32, tx_fifo_num: u32) -> UsbResult
     Ok(())
 }
 
-/// prime bulk OUT 接收一段缓冲区。`buf` 必须是 cache line 对齐的 DMA 可见缓冲。
+/// 启动一次 Bulk OUT 接收（buffer DMA）：写入 `DOEPDMA` / `DOEPTSIZ` 并置位 `EPENA`。
 ///
-/// 必须用 vendor-style 全字写而不是 RMW —— XFERCOMPL 之后 dwc2 在某些版本上会
-/// 自动把 EPDIS（bit 30）设为 1，普通 modify(EPENA + CNAK) 会保留 EPDIS 导致
-/// 下次 prime 不真正接收。
+/// `buf_pa` 须为 **DMA 总线地址**（cache line 对齐的 DMA 可见缓冲），且已对 CPU 写做过 clean。
+/// 使用全字写 `DOEPCTL`，避免 `EPDIS` 残留导致本次 prime 无效。
+///
+/// # 参数
+/// - `ep_num`：已配置的 Bulk OUT 端点号。
+/// - `buf_pa`：接收缓冲区的 DMA 物理地址（或总线地址）。
+/// - `len`：本描述符请求接收的最大字节数（写入 `XFERSIZE` 低 19 位）。
+/// - `num_packets`：期望的分包数量（写入 `PKTCNT`，ZLP 时亦常为 1）。
 pub fn prime_bulk_out(ep_num: u8, buf_pa: u32, len: u32, num_packets: u32) -> UsbResult<()> {
     let ep = ep_num as usize;
     if ep == 0 || ep >= crate::usb::host::dwc2::regs::DWC2_MAX_DEV_ENDPOINTS {
@@ -754,9 +771,16 @@ pub fn prime_bulk_out(ep_num: u8, buf_pa: u32, len: u32, num_packets: u32) -> Us
     Ok(())
 }
 
-/// 启动 bulk IN 发送。`len` 是要发的字节数；`num_packets` 通常为 `ceil(len / mps)` 且至少为 1（ZLP）。
+/// 启动一次 Bulk IN 发送：写入 `DIEPDMA` / `DIEPTSIZ` 并置位 `EPENA`。
 ///
-/// 同样使用全字写避免 EPDIS 残留。
+/// `buf_pa` 为待发送数据的 DMA 总线地址；`num_packets` 一般为 `ceil(len / mps)`，至少为 1（含 ZLP）。
+/// 同样用全字写 `DIEPCTL` 清除 `EPDIS` 粘连。
+///
+/// # 参数
+/// - `ep_num`：已配置的 Bulk IN 端点号。
+/// - `buf_pa`：发送数据的 DMA 总线地址。
+/// - `len`：本事务发送的字节总数。
+/// - `num_packets`：USB 分包个数（写入 `PKTCNT`）。
 pub fn start_bulk_in(ep_num: u8, buf_pa: u32, len: u32, num_packets: u32) -> UsbResult<()> {
     let ep = ep_num as usize;
     if ep == 0 || ep >= crate::usb::host::dwc2::regs::DWC2_MAX_DEV_ENDPOINTS {
@@ -772,7 +796,13 @@ pub fn start_bulk_in(ep_num: u8, buf_pa: u32, len: u32, num_packets: u32) -> Usb
     Ok(())
 }
 
-/// 读取 EP n 的 DOEPINT 并清除指定位（class 实现里轮询 OUT XFERCOMPL 时使用）。
+/// 读取并 **写回清除** 指定 OUT 端点的 `DOEPINT`（轮询 `XFERCOMPL` 等标志用）。
+///
+/// # 参数
+/// - `ep_num`：设备 OUT 端点号（与 `DOEP` 数组下标一致）。
+///
+/// # 返回值
+/// 清除前读到的中断状态位掩码。
 pub fn read_clear_doepint(ep_num: u8) -> u32 {
     let r = regs();
     let v = r.doep[ep_num as usize].doepint.get();
@@ -782,7 +812,13 @@ pub fn read_clear_doepint(ep_num: u8) -> u32 {
     v
 }
 
-/// 读取 EP n 的 DIEPINT 并清除指定位。
+/// 读取并 **写回清除** 指定 IN 端点的 `DIEPINT`。
+///
+/// # 参数
+/// - `ep_num`：设备 IN 端点号。
+///
+/// # 返回值
+/// 清除前读到的中断状态位掩码。
 pub fn read_clear_diepint(ep_num: u8) -> u32 {
     let r = regs();
     let v = r.diep[ep_num as usize].diepint.get();

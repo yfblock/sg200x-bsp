@@ -112,7 +112,7 @@ pub struct UvcStreamSelection {
     pub negotiated_frame_size: u32,
 }
 
-/// 读取配置描述符（最大 4096 字节，`wTotalLength`）。
+/// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
 pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
     dwc2_ep0::ep0_control_read(
@@ -459,6 +459,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     Ok(())
 }
 
+/// 将 VS 接口切回 `alt=0`，并清空抓帧连续性状态。
 pub fn uvc_stop_streaming(dev: u32, ep0_mps: u32, vs_if: u8) -> UsbResult<()> {
     reset_frame_continuity();
     dwc2_ep0::ep0_control_write_no_data(dev, setup::set_interface(0, vs_if), ep0_mps)
@@ -591,7 +592,7 @@ fn process_packet_capturing(
     Ok(frame_done)
 }
 
-/// 全局开关：打开后 [`process_packet_capturing`] 会对每次 EOF/FID-flip trace 出 microframe。
+/// 全局开关：为 `true` 时在抓帧路径上对 EOF / FID 翻转打印微帧级 trace。
 pub static FRAME_DEBUG: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 

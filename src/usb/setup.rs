@@ -1,9 +1,15 @@
 //! USB 标准 SETUP 数据包（小端，8 字节）。
 //!
-//! Class 专用 SETUP（如 Mass Storage 的 `Bulk-Only Reset` / `GET_MAX_LUN`）已搬到对应
-//! `crate::usb::class::*` 模块。
+//! 返回的数组顺序与总线上 **SETUP PID** 后紧跟的 8 字节一致：`bmRequestType`、`bRequest`、
+//! `wValue`、`wIndex`、`wLength`（各字段小端）。
+//!
+//! 类专用 SETUP（如 Mass Storage 的 `Bulk-Only Reset` / `GET_MAX_LUN`）见
+//! [`crate::usb::class::mass_storage`]；UVC 的 VS 控制见 [`crate::usb::class::uvc`]。
 
-/// `GET_DESCRIPTOR`（Device），`wLength` 为本次希望读回的字节数（常见先读 8）。
+/// 构造标准 `GET_DESCRIPTOR(Device)` 的 8 字节 SETUP。
+///
+/// # 参数
+/// - `w_length`：数据阶段主机希望读取的字节数（常见先读 8 再读 18）。
 #[inline]
 pub fn get_descriptor_device(w_length: u16) -> [u8; 8] {
     [
@@ -18,7 +24,10 @@ pub fn get_descriptor_device(w_length: u16) -> [u8; 8] {
     ]
 }
 
-/// `SET_ADDRESS`（`addr` 1..127）。
+/// 构造 `SET_ADDRESS` 的 8 字节 SETUP。
+///
+/// # 参数
+/// - `addr`：设备新地址，合法范围 **1..=127**（0 为默认地址）。
 #[inline]
 pub fn set_address(addr: u8) -> [u8; 8] {
     [
@@ -33,7 +42,7 @@ pub fn set_address(addr: u8) -> [u8; 8] {
     ]
 }
 
-/// `GET_CONFIGURATION`（返回 1 字节 `bConfigurationValue`）。
+/// 构造 `GET_CONFIGURATION`（数据阶段返回 1 字节 `bConfigurationValue`）。
 #[inline]
 pub fn get_configuration() -> [u8; 8] {
     [
@@ -48,7 +57,10 @@ pub fn get_configuration() -> [u8; 8] {
     ]
 }
 
-/// `SET_CONFIGURATION`。
+/// 构造 `SET_CONFIGURATION` 的 8 字节 SETUP。
+///
+/// # 参数
+/// - `cfg`：要选中的配置值 `bConfigurationValue`（通常非 0 表示激活该配置）。
 #[inline]
 pub fn set_configuration(cfg: u8) -> [u8; 8] {
     [
@@ -63,7 +75,11 @@ pub fn set_configuration(cfg: u8) -> [u8; 8] {
     ]
 }
 
-/// Hub：`SET_PORT_FEATURE`（`bmRequestType=0x23` class+other，`bRequest=SET_FEATURE`）。
+/// Hub：`SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
+///
+/// # 参数
+/// - `port`：Hub 下游端口号，**从 1 开始**（与 USB Hub 规范一致）。
+/// - `feature`：端口特性选择子，例如 [`HUB_PORT_FEATURE_POWER`]。
 #[inline]
 pub fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
     [
@@ -78,8 +94,12 @@ pub fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
     ]
 }
 
-/// Hub：`CLEAR_PORT_FEATURE`（`bmRequestType=0x23` class+other，`bRequest=CLEAR_FEATURE`）。
-/// 用来清掉 `C_PORT_CONNECTION` / `C_PORT_RESET` 等"变化位"。
+/// Hub：`CLEAR_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=CLEAR_FEATURE`）。
+/// 用于清除 `C_PORT_CONNECTION` / `C_PORT_RESET` 等变化位。
+///
+/// # 参数
+/// - `port`：Hub 下游端口号（从 1 开始）。
+/// - `feature`：要清除的端口特性或 `C_PORT_*` 常量。
 #[inline]
 pub fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
     [
@@ -114,7 +134,11 @@ pub const USB_DT_CONFIGURATION: u8 = 2;
 /// Hub 类描述符类型（`GET_DESCRIPTOR` 高字节）。
 pub const USB_DT_HUB: u8 = 0x29;
 
-/// `GET_DESCRIPTOR(CONFIGURATION, index, wLength)` — 已寻址设备。
+/// 构造 `GET_DESCRIPTOR(Configuration)` — 对**已分配地址**的设备使用。
+///
+/// # 参数
+/// - `cfg_index`：配置描述符索引（通常为 0）。
+/// - `w_length`：希望读回的字节数（可先读 9 字节头再按 `wTotalLength` 读全）。
 #[inline]
 pub fn get_descriptor_configuration(cfg_index: u8, w_length: u16) -> [u8; 8] {
     [
@@ -129,7 +153,10 @@ pub fn get_descriptor_configuration(cfg_index: u8, w_length: u16) -> [u8; 8] {
     ]
 }
 
-/// `GET_DESCRIPTOR(HUB)` — Hub 已配置后由 Hub 设备返回（`bmRequestType` Device+Class+IN）。
+/// 构造 `GET_DESCRIPTOR(HUB)` — 在 Hub **已 SET_CONFIGURATION** 后向其读取 Hub 描述符。
+///
+/// # 参数
+/// - `w_length`：数据阶段长度（常取 9 或更大以容纳 `bNbrPorts` 等字段）。
 #[inline]
 pub fn get_descriptor_hub(w_length: u16) -> [u8; 8] {
     [
@@ -144,7 +171,10 @@ pub fn get_descriptor_hub(w_length: u16) -> [u8; 8] {
     ]
 }
 
-/// Hub：`GET_PORT_STATUS`（`bmRequestType=0xA3` Class+IN+Other，`bRequest=GET_STATUS`）。
+/// Hub：`GET_PORT_STATUS`（`bmRequestType=0xA3`，数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
+///
+/// # 参数
+/// - `port`：Hub 下游端口号（从 1 开始）。
 #[inline]
 pub fn hub_get_port_status(port: u16) -> [u8; 8] {
     [
@@ -159,7 +189,11 @@ pub fn hub_get_port_status(port: u16) -> [u8; 8] {
     ]
 }
 
-/// `SET_INTERFACE`（选择备用设置，UVC 开流常用）。
+/// 构造 `SET_INTERFACE`（选择接口的备用设置，UVC 开流等场景常用）。
+///
+/// # 参数
+/// - `alt`：备用设置编号 `bAlternateSetting`。
+/// - `interface`：接口号 `bInterfaceNumber`。
 #[inline]
 pub fn set_interface(alt: u8, interface: u8) -> [u8; 8] {
     [
