@@ -32,10 +32,11 @@
 mod consts;
 mod utils;
 
-pub use consts::{CmdError, CommandType, PowerLevel, ResponseType};
+pub use consts::{BLOCK_SIZE, CmdError, CommandType, PowerLevel, ResponseType};
 pub use consts::{SD_DRIVER_BASE, SdmmcRegisters, TOP_BASE};
 
 use consts::*;
+use core::cell::Cell;
 use utils::{delay, delay_long, delay_short};
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -47,6 +48,25 @@ use crate::pinmux::{
 
 extern crate alloc;
 
+/// SD 卡基本信息（在 [`Sdmmc::init`] 之后填充，可由
+/// [`Sdmmc::card_info`] 读取）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SdCardInfo {
+    /// 卡相对地址 (RCA)：CMD3 返回的高 16 位
+    pub rca: u32,
+    /// CSD 寄存器原始内容（按 SDHCI Response 寄存器排列：
+    /// `csd_raw[0]` = response0 = CSD\[39:8\]，
+    /// `csd_raw[1]` = response1 = CSD\[71:40\]，
+    /// `csd_raw[2]` = response2 = CSD\[103:72\]，
+    /// `csd_raw[3]` = response3 = CSD\[135:104\]，
+    /// 高 8 位为 R2 起始位/保留位，CSD\[7:0\]（CRC+stop）已被硬件丢弃）
+    pub csd_raw: [u32; 4],
+    /// CSD_STRUCTURE 字段：0=v1.0(SDSC)，1=v2.0(SDHC/SDXC)，2=v3.0(SDUC)
+    pub csd_structure: u8,
+    /// SD 卡容量（字节）；解析失败或未初始化时为 0
+    pub capacity_bytes: u64,
+}
+
 /// SDMMC 驱动结构体
 ///
 /// 提供对 SD 卡控制器的访问接口
@@ -57,6 +77,8 @@ pub struct Sdmmc {
     top_regs: &'static TopRegisters,
     /// Pinmux 驱动 (可选)
     pinmux: Option<Pinmux>,
+    /// 缓存 [`SdCardInfo`]：在 [`Sdmmc::init`] 中填充
+    card_info: Cell<SdCardInfo>,
 }
 
 impl Sdmmc {
@@ -73,6 +95,7 @@ impl Sdmmc {
                 regs: &*(SD_DRIVER_BASE as *const SdmmcRegisters),
                 top_regs: &*(TOP_BASE as *const TopRegisters),
                 pinmux: Some(Pinmux::new()),
+                card_info: Cell::new(SdCardInfo::default()),
             }
         }
     }
@@ -88,6 +111,7 @@ impl Sdmmc {
                 regs: &*(sd_base as *const SdmmcRegisters),
                 top_regs: &*(top_base as *const TopRegisters),
                 pinmux: None,
+                card_info: Cell::new(SdCardInfo::default()),
             }
         }
     }
@@ -387,6 +411,45 @@ impl Sdmmc {
     /// 获取响应寄存器 0 的值
     pub fn get_response0(&self) -> u32 {
         self.regs.response0.get()
+    }
+
+    /// 返回 [`Sdmmc::init`] 期间缓存的 SD 卡基本信息（含 RCA / CSD / 容量）。
+    ///
+    /// 在 `init()` 成功调用之前，返回值为 [`SdCardInfo::default`]
+    /// （`capacity_bytes == 0`）。
+    pub fn card_info(&self) -> SdCardInfo {
+        self.card_info.get()
+    }
+
+    /// 便捷接口：返回 SD 卡的容量（字节）。
+    /// 若尚未初始化或 CSD 解析失败，则返回 0。
+    pub fn card_capacity_bytes(&self) -> u64 {
+        self.card_info.get().capacity_bytes
+    }
+
+    /// 便捷接口：返回 SD 卡的容量（块数，每块 [`BLOCK_SIZE`] 字节）。
+    pub fn card_capacity_blocks(&self) -> u64 {
+        self.card_info.get().capacity_bytes / BLOCK_SIZE as u64
+    }
+
+    /// 通过 CMD9 重新读取 CSD 寄存器并刷新缓存的 [`SdCardInfo`]。
+    ///
+    /// 仅当卡已经处于 stand-by 状态时才能直接发送 CMD9；
+    /// 若卡当前在 transfer 状态（已被 CMD7 选中），调用方需要先发送
+    /// `CMD7(arg=0)` 取消选中再调用本方法（本接口未做状态机切换，
+    /// 主要用于诊断 / 在 [`Sdmmc::init`] 失败后再单独尝试一次）。
+    pub fn refresh_csd(&self) -> Result<SdCardInfo, CmdError> {
+        let rca = self.card_info.get().rca;
+        self.cmd_transfer(CommandType::CMD(9), rca, 0, false)?;
+        let csd_raw = [
+            self.regs.response0.get(),
+            self.regs.response1.get(),
+            self.regs.response2.get(),
+            self.regs.response3.get(),
+        ];
+        let info = parse_sd_card_info(rca, csd_raw);
+        self.card_info.set(info);
+        Ok(info)
     }
 
     /// 配置 SD 卡引脚 (PAD) 设置
@@ -709,6 +772,29 @@ impl Sdmmc {
         // CMD9: SEND_CSD - 获取卡特定数据
         self.cmd_transfer(CommandType::CMD(9), rca, 0, false)?;
 
+        // 立即把 R2 响应保存到缓存：CMD7 之后再读 response 寄存器内容会被
+        // 后续命令覆盖；此处保存的 [u32; 4] 即原始 CSD 数据（不含 CRC）。
+        let csd_raw = [
+            self.regs.response0.get(),
+            self.regs.response1.get(),
+            self.regs.response2.get(),
+            self.regs.response3.get(),
+        ];
+        let info = parse_sd_card_info(rca, csd_raw);
+        log::debug!(
+            "sdmmc CSD raw: r0={:#010x} r1={:#010x} r2={:#010x} r3={:#010x}",
+            csd_raw[0],
+            csd_raw[1],
+            csd_raw[2],
+            csd_raw[3],
+        );
+        log::debug!(
+            "sdmmc CSD struct=v{}.0 capacity={} bytes",
+            info.csd_structure as u32 + 1,
+            info.capacity_bytes
+        );
+        self.card_info.set(info);
+
         // CMD7: SELECT_CARD - 选择卡进入传输状态
         self.cmd_transfer(CommandType::CMD(7), rca, 0, false)?;
 
@@ -737,4 +823,74 @@ pub fn init() -> Result<Sdmmc, CmdError> {
     let sdmmc = unsafe { Sdmmc::new() };
     sdmmc.init()?;
     Ok(sdmmc)
+}
+
+/// 根据 R2 响应寄存器（response0..response3）解析出 SD 卡的容量等基本信息。
+///
+/// SDHCI 把 R2 响应的 \[135:8\] 直接放进 RESP\_REG\[127:0\]：
+///
+/// ```text
+/// response3[31:0] = R2[135:104] = (start+trans+rsv) | CSD[127:104]
+/// response2[31:0] = R2[103:72]  = CSD[103:72]
+/// response1[31:0] = R2[71:40]   = CSD[71:40]
+/// response0[31:0] = R2[39:8]    = CSD[39:8]
+/// ```
+///
+/// 即 `RESP_REG[i] = CSD[i + 8]`（CSD\[7:0\] 的 CRC + stop bit 已被硬件丢弃）。
+/// 由此推出本函数中各字段的取位方式。
+///
+/// 三种 CSD 结构：
+/// - **v1.0 (SDSC)**：容量 = `(C_SIZE + 1) * 2^(C_SIZE_MULT + 2) * 2^READ_BL_LEN`
+/// - **v2.0 (SDHC/SDXC)**：容量 = `(C_SIZE + 1) * 512KiB`，C\_SIZE 为 22 bit
+/// - **v3.0 (SDUC)**：容量 = `(C_SIZE + 1) * 512KiB`，C\_SIZE 为 28 bit
+pub fn parse_sd_card_info(rca: u32, csd_raw: [u32; 4]) -> SdCardInfo {
+    let r0 = csd_raw[0];
+    let r1 = csd_raw[1];
+    let r2 = csd_raw[2];
+    let r3 = csd_raw[3];
+
+    // CSD[127:126] —— RESP_REG[119:118] —— response3 bit[23:22]
+    let csd_structure = ((r3 >> 22) & 0x3) as u8;
+
+    let capacity_bytes = match csd_structure {
+        0 => {
+            // CSD v1.0 (SDSC)
+            // READ_BL_LEN: CSD[83:80] = RESP_REG[75:72] = response2[11:8]
+            let read_bl_len = (r2 >> 8) & 0xF;
+            // C_SIZE: CSD[73:62] (12 bit)，跨 response2/response1
+            //   高 2 bit  CSD[73:72] = response2[1:0]
+            //   低 10 bit CSD[71:62] = response1[31:22]
+            let c_size = ((r2 & 0x3) << 10) | ((r1 >> 22) & 0x3FF);
+            // C_SIZE_MULT: CSD[49:47] = response1[9:7]
+            let c_size_mult = (r1 >> 7) & 0x7;
+            let mult = 1u64 << (c_size_mult + 2);
+            let blocknr = (c_size as u64 + 1) * mult;
+            let block_len = 1u64 << read_bl_len;
+            blocknr * block_len
+        }
+        1 => {
+            // CSD v2.0 (SDHC / SDXC)
+            // C_SIZE: CSD[69:48] = response1[29:8]，22 bit
+            let c_size = (r1 >> 8) & 0x3F_FFFF;
+            (c_size as u64 + 1) * 512 * 1024
+        }
+        2 => {
+            // CSD v3.0 (SDUC)
+            // C_SIZE: CSD[75:48] (28 bit)
+            //   高 4 bit  CSD[75:72] = response2[3:0]
+            //   低 24 bit CSD[71:48] = response1[31:8]
+            let c_size = ((r2 & 0xF) << 24) | ((r1 >> 8) & 0xFF_FFFF);
+            (c_size as u64 + 1) * 512 * 1024
+        }
+        _ => 0,
+    };
+
+    let _ = r0; // 仅保留作完整存档；CSD v1/v2/v3 容量都不依赖 response0。
+
+    SdCardInfo {
+        rca,
+        csd_raw,
+        csd_structure,
+        capacity_bytes,
+    }
 }
