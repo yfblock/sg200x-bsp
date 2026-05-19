@@ -34,7 +34,7 @@ use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 use crate::usb::error::{UsbError, UsbResult};
 use crate::usb::host::dwc2::mmio;
 use crate::usb::host::dwc2::regs::{Dwc2Regs, DCFG, DIEPCTL, DOEPCTL, DSTS};
-use crate::usb::platform;
+use crate::usb;
 use crate::utils::cache;
 
 use super::desc::{
@@ -146,7 +146,7 @@ fn ep0_out_ptr() -> *mut u8 {
 
 #[inline]
 fn dma_phys(p: *const u8) -> u32 {
-    platform::usb_dma_phys_for(p)
+    usb::usb_dma_phys_for(p)
 }
 
 #[inline]
@@ -197,7 +197,7 @@ impl Ep0Service {
 
     /// 主循环单步：处理一轮 GINTSTS 事件，回调 class 钩子。**不会阻塞**，调用方按需轮询。
     pub fn service<C: UsbDeviceClass>(&mut self, class: &mut C) {
-        if platform::dwc2_base_virt() == 0 {
+        if usb::dwc2_base_virt() == 0 {
             return;
         }
         let r = regs();
@@ -223,7 +223,7 @@ impl Ep0Service {
     }
 
     fn handle_usbrst(&mut self) {
-        crate::usb::log::usb_log_fmt(format_args!("USB-DEV USBRST"));
+        log::info!("USB-DEV USBRST");
         let r = regs();
         // 把 DCFG.DEVADDR 清回 0
         r.dcfg.modify(DCFG::DEVADDR.val(0));
@@ -260,11 +260,9 @@ impl Ep0Service {
         };
         self.speed = speed;
         self.enumerated = true;
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DEV ENUMDONE speed={:?} DSTS={:#010x}",
+        log::info!("USB-DEV ENUMDONE speed={:?} DSTS={:#010x}",
             speed,
-            r.dsts.get()
-        ));
+            r.dsts.get());
         // EP0 MPS 编码（高速 / 全速：00=64；低速：11=8）
         let mps_field: u32 = if speed == UsbSpeed::LowSpeed { 3 } else { 0 };
         r.diep[0].diepctl.modify(DIEPCTL::MPS.val(mps_field));
@@ -495,10 +493,8 @@ impl Ep0Service {
                 Ep0State::StatusIn => {
                     // ZLP IN 完成，结束传输
                     if let Some(addr) = self.pending_address.take() {
-                        crate::usb::log::usb_log_fmt(format_args!(
-                            "USB-DEV SET_ADDRESS({}) status complete",
-                            addr
-                        ));
+                        log::info!("USB-DEV SET_ADDRESS({}) status complete",
+                            addr);
                     }
                     self.state = Ep0State::WaitSetup;
                     self.prime_ep0_setup();
@@ -638,10 +634,8 @@ impl Ep0Service {
                 self.prime_ep0_status_in();
             }
             _ => {
-                crate::usb::log::usb_log_fmt(format_args!(
-                    "USB-DEV unsupported standard request {:#04x}, STALL",
-                    s.b_request
-                ));
+                log::info!("USB-DEV unsupported standard request {:#04x}, STALL",
+                    s.b_request);
                 self.stall_ep0();
             }
         }

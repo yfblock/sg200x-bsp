@@ -10,23 +10,10 @@
 
 use tock_registers::{register_bitfields, register_structs, registers::ReadWrite};
 
-// ============================================================================
-// 基地址定义
-// ============================================================================
+pub use crate::soc::{SD_DRIVER_BASE, TOP_BASE};
 
-/// TOP 模块基地址 (系统顶层控制寄存器)
-pub const TOP_BASE: usize = 0x0300_0000;
-
-/// SD 控制器基地址 (SDIO0)
-/// 所有 SD 控制器寄存器都相对于此地址偏移
-pub const SD_DRIVER_BASE: usize = 0x0431_0000;
-
-/// 软件复位模块基地址
-pub const SOFT_REST_BASE_ADDR: usize = 0x0300_3000;
-
-/// 引脚复用 (PINMUX) 模块基地址
-/// 用于配置 GPIO 引脚的功能选择
-pub const PINMUX_BASE: usize = 0x0300_1000;
+/// 与 [`crate::soc::SOFT_RST_BASE`] 同址（历史拼写 `REST`）
+pub const SOFT_REST_BASE_ADDR: usize = crate::soc::SOFT_RST_BASE;
 
 // ============================================================================
 // TOP 模块寄存器偏移
@@ -555,7 +542,7 @@ register_bitfields! [
 register_structs! {
     /// SDMMC 控制器寄存器组
     ///
-    /// 基地址: SD_DRIVER_BASE (0x0431_0000)
+    /// 基地址: [`crate::soc::SD_DRIVER_BASE`]
     pub SdmmcRegisters {
         /// SDMA 系统地址 / 参数寄存器 (偏移 0x00)
         (0x000 => pub sdma_sys_addr: ReadWrite<u32, SDMA_SYS_ADDR::Register>),
@@ -625,7 +612,7 @@ register_structs! {
 register_structs! {
     /// TOP 模块寄存器组 (部分)
     ///
-    /// 基地址: TOP_BASE (0x0300_0000)
+    /// 基地址: [`crate::soc::TOP_BASE`]
     pub TopRegisters {
         /// 保留 (偏移 0x00-0x1F0)
         (0x000 => _reserved0),

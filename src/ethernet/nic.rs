@@ -1,6 +1,6 @@
 //! SG2002 / CV1812H 板载 Synopsys DesignWare MAC（DWMAC 3.70a）轮询驱动 —— **纯硬件层**。
 //!
-//! 控制器位于 `0x0407_0000`，自带内部 EPHY；本驱动覆盖：
+//! 控制器位于 [`crate::soc::ETH_BASE`]，自带内部 EPHY；本驱动覆盖：
 //!
 //! - 时钟门控（CLKGEN bit25/26）+ ETH MAC 软复位 + EPHY 软复位
 //! - DMA 软复位、TX/RX 描述符环、DMA bus mode（PBL=8、64 byte stride）
@@ -33,14 +33,12 @@ use super::regs::{
 };
 use crate::utils::cache::{dcache_clean_range, dcache_invalidate_range};
 
-/// SG2002 板载 GMAC 默认 MMIO 基地址（`cvitek,cv1810-eth` DTS 节点 `ethernet@4070000`）。
-pub const ETH_BASE: usize = 0x0407_0000;
+pub use crate::soc::ETH_BASE;
+
+use crate::soc::CLKGEN_BASE;
 
 /// 默认 PHY 地址（PHY0 直接挂在内部 EPHY MDIO 总线上）。
 const PHY_ADDR: u32 = 0;
-
-/// CLKGEN 顶层基地址：`clock-controller`（`cvitek,cv181x-clk`）。
-const CLKGEN_BASE: usize = 0x0300_2000;
 /// `REG_CLK_EN_0` 偏移（参考 Linux `clk-cv181x.c`）。
 const REG_CLK_EN_0: usize = 0x000;
 /// CLKGEN bit25：clk_axi4_eth0；bit26：clk_eth0_500m（参考板级 U-Boot `cvitek_eth.c`）。

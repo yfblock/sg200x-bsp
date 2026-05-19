@@ -3,7 +3,8 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-use crate::usb::platform;
+use crate::soc::CV182X_USB2_PHY_BASE;
+use crate::usb;
 use super::regs::{Cv182xUsb2Phy, Dwc2HostChannel, Dwc2Regs, DWC2_MAX_HOST_CHANNELS};
 
 /// 读取 32-bit MMIO（仅 PHY/调试转储用，DWC2 主寄存器请用 [`dwc2_regs`]）。
@@ -44,7 +45,7 @@ pub unsafe fn modify32(addr: usize, mask: u32, bits: u32) {
 /// 未设置 MMIO 基址（或为 0）时返回 `None`。
 #[inline]
 pub fn dwc2_regs() -> Option<&'static Dwc2Regs> {
-    let base = platform::dwc2_base_virt();
+    let base = usb::dwc2_base_virt();
     if base == 0 {
         return None;
     }
@@ -72,8 +73,7 @@ pub fn dwc2_channel(ch: u32) -> Option<&'static Dwc2HostChannel> {
 #[cfg(feature = "cv182x-host")]
 #[inline]
 pub fn cv182x_phy_regs() -> &'static Cv182xUsb2Phy {
-    const CV182X_USB2_PHY_MMIO: usize = 0x0300_6000;
-    unsafe { &*(CV182X_USB2_PHY_MMIO as *const Cv182xUsb2Phy) }
+    unsafe { &*(CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) }
 }
 
 #[cfg(not(feature = "cv182x-host"))]

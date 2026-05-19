@@ -524,7 +524,7 @@ register_bitfields![u32,
 ];
 
 register_structs! {
-    /// CV182x 片内 USB2 PHY MMIO（DTS `usb@04340000` 第二段 `reg=<0x03006000 0x58>`）。
+    /// CV182x 片内 USB2 PHY MMIO（DTS `usb@04340000` 第二段 `reg`，物理基址 [`crate::soc::CV182X_USB2_PHY_BASE`]）。
     /// 字段名对齐 vendor Linux `drivers/usb/dwc2/platform.c` 中的 `REGxxx` 宏。
     pub Cv182xUsb2Phy {
         (0x000 => pub reg000: ReadWrite<u32>),

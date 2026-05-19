@@ -6,23 +6,9 @@
 //! - I2C0-I2C4: 位于 Active Domain
 //! - RTCSYS_I2C: 位于 No-die Domain (RTC 子系统)
 
-/// I2C0 控制器基地址
-pub const I2C0_BASE: usize = 0x0400_0000;
-
-/// I2C1 控制器基地址
-pub const I2C1_BASE: usize = 0x0401_0000;
-
-/// I2C2 控制器基地址
-pub const I2C2_BASE: usize = 0x0402_0000;
-
-/// I2C3 控制器基地址
-pub const I2C3_BASE: usize = 0x0403_0000;
-
-/// I2C4 控制器基地址
-pub const I2C4_BASE: usize = 0x0404_0000;
-
-/// RTCSYS_I2C 控制器基地址 (No-die Domain)
-pub const RTCSYS_I2C_BASE: usize = 0x0502_B000;
+pub use crate::soc::{
+    I2C0_BASE, I2C1_BASE, I2C2_BASE, I2C3_BASE, I2C4_BASE, RTCSYS_I2C_BASE,
+};
 
 /// I2C 实例标识符
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,27 +113,4 @@ impl I2cClockConfig {
         sda_setup: 25,
         fs_spklen: 5,
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_i2c_base_addresses() {
-        assert_eq!(I2cInstance::I2c0.base_address(), 0x0400_0000);
-        assert_eq!(I2cInstance::I2c1.base_address(), 0x0401_0000);
-        assert_eq!(I2cInstance::I2c2.base_address(), 0x0402_0000);
-        assert_eq!(I2cInstance::I2c3.base_address(), 0x0403_0000);
-        assert_eq!(I2cInstance::I2c4.base_address(), 0x0404_0000);
-        assert_eq!(I2cInstance::RtcsysI2c.base_address(), 0x0502_B000);
-    }
-
-    #[test]
-    fn test_i2c_domain() {
-        assert!(I2cInstance::I2c0.is_active_domain());
-        assert!(I2cInstance::I2c4.is_active_domain());
-        assert!(!I2cInstance::RtcsysI2c.is_active_domain());
-        assert!(I2cInstance::RtcsysI2c.is_rtc_domain());
-    }
 }

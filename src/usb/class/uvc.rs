@@ -6,7 +6,6 @@
 use crate::usb::error::{UsbError, UsbResult};
 use crate::usb::host::dwc2::ep0 as dwc2_ep0;
 use crate::usb::host::dwc2::ep0::{DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
-use crate::usb::log::usb_log_fmt;
 use crate::usb::setup;
 
 const VS_PROBE_CONTROL: u8 = 0x01;
@@ -291,11 +290,9 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 last_fmt_ix = cfg[i + 3];
                 cur_fmt_subtype_for_frame = st;
                 cur_fmt_ix_for_frame = cfg[i + 3];
-                usb_log_fmt(format_args!(
-                    "UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={} subtype={:#04x} ({})",
+                log::info!("UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={} subtype={:#04x} ({})",
                     last_fmt_ix, st,
-                    if st == VS_FORMAT_MJPEG { "MJPEG" } else { "Uncompressed" }
-                ));
+                    if st == VS_FORMAT_MJPEG { "MJPEG" } else { "Uncompressed" });
             }
             if (st == VS_FRAME_MJPEG || st == VS_FRAME_UNCOMPRESSED) && bl >= 26 {
                 let frame_ix = cfg[i + 3];
@@ -319,12 +316,10 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 }
                 let fps_x100 = if dflt_ival > 0 { 1_000_000_00u32 / dflt_ival.max(1) } else { 0 };
                 let fps_min_x100 = if min_ival > 0 { 1_000_000_00u32 / min_ival.max(1) } else { 0 };
-                usb_log_fmt(format_args!(
-                    "UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
+                log::info!("UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
                     w, h,
                     fps_x100 / 100, fps_x100 % 100,
-                    fps_min_x100 / 100, fps_min_x100 % 100
-                ));
+                    fps_min_x100 / 100, fps_min_x100 % 100);
                 let dflt_ival = if min_ival > 0 { min_ival } else { dflt_ival };
                 let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
                 let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG
@@ -382,10 +377,8 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
             }
             let ep_num = ep_addr & 0x0F;
             let total = u32::from(mps) * u32::from(mult);
-            usb_log_fmt(format_args!(
-                "UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind={} mps={mps} mult={mult} total={total}/uframe mps_raw={mps_raw:#06x}",
-                if xfer == ENDPOINT_ATTR_BULK { "Bulk" } else if xfer == ENDPOINT_ATTR_ISOCH { "Isoch" } else { "Other" }
-            ));
+            log::info!("UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind={} mps={mps} mult={mult} total={total}/uframe mps_raw={mps_raw:#06x}",
+                if xfer == ENDPOINT_ATTR_BULK { "Bulk" } else if xfer == ENDPOINT_ATTR_ISOCH { "Isoch" } else { "Other" });
             if xfer == ENDPOINT_ATTR_BULK {
                 let tak = (cur_alt, ep_num, mps_raw, cur_ifc_num);
                 best_bulk = Some(match best_bulk {
@@ -441,10 +434,8 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
         },
     };
 
-    usb_log_fmt(format_args!(
-        "UVC: SEL if={vs_if} alt={alt} ep={epn} {:?} mps_raw={:#06x} fmt_ix={fmt_ix} frame_ix={frame_ix} {}x{} iv={interval} mjpeg={is_mjpeg}",
-        kind, mps_raw, frame_w, frame_h
-    ));
+    log::info!("UVC: SEL if={vs_if} alt={alt} ep={epn} {:?} mps_raw={:#06x} fmt_ix={fmt_ix} frame_ix={frame_ix} {}x{} iv={interval} mjpeg={is_mjpeg}",
+        kind, mps_raw, frame_w, frame_h);
 
     Ok(UvcStreamSelection {
         vs_interface: vs_if,
@@ -511,12 +502,10 @@ fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
         .or(best_max)
         .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
     if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
-        usb_log_fmt(format_args!(
-            "UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={} (mult>1 skipped)",
+        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={} (mult>1 skipped)",
             sel.alt_setting, sel.mps_raw,
             u32::from(sel.mps_raw & 0x7FF) * (u32::from((sel.mps_raw >> 11) & 0x3) + 1),
-            new_alt, new_mps_raw, new_total, need
-        ));
+            new_alt, new_mps_raw, new_total, need);
         sel.alt_setting = new_alt;
         sel.mps_raw = new_mps_raw;
     }
@@ -740,12 +729,12 @@ fn pu_apply_one(
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
                     let ok = try_set_cur_u8(dev, ep0_mps, vc_if, pu, selector, d);
-                    usb_log_fmt(format_args!(
+                    log::info!(
                         "UVC: PU.{name} {c} -> {d} ({want_src}, {})",
                         if ok { "ok" } else { "set 失败" }
-                    ));
+                    );
                 }
-                (None, _) => usb_log_fmt(format_args!("UVC: PU.{name} GET_CUR 失败")),
+                (None, _) => log::warn!("UVC: PU.{name} GET_CUR 失败"),
                 _ => {}
             }
         }
@@ -758,12 +747,12 @@ fn pu_apply_one(
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
                     let ok = try_set_cur_u16(dev, ep0_mps, vc_if, pu, selector, d);
-                    usb_log_fmt(format_args!(
+                    log::info!(
                         "UVC: PU.{name} {c} -> {d} ({want_src}, {})",
                         if ok { "ok" } else { "set 失败" }
-                    ));
+                    );
                 }
-                (None, _) => usb_log_fmt(format_args!("UVC: PU.{name} GET_CUR 失败")),
+                (None, _) => log::warn!("UVC: PU.{name} GET_CUR 失败"),
                 _ => {}
             }
         }
@@ -804,14 +793,14 @@ pub fn uvc_init_camera_controls(
     ent: &UvcControlEntities,
     tune: &UvcImageTuning,
 ) -> UsbResult<()> {
-    usb_log_fmt(format_args!(
+    log::info!(
         "UVC: VC if={} CT={:?} (bm={:#010x}) PU={:?} (bm={:#010x})",
         ent.vc_interface,
         ent.camera_terminal_id,
         ent.ct_controls,
         ent.processing_unit_id,
         ent.pu_controls
-    ));
+    );
 
     if let Some(pu) = ent.processing_unit_id {
         let vc_if = ent.vc_interface;
@@ -840,7 +829,7 @@ pub fn uvc_init_camera_controls(
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 0);
                 }
                 let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, k);
-                usb_log_fmt(format_args!("UVC: PU.WB = {k}K (manual)"));
+                log::info!("UVC: PU.WB = {k}K (manual)");
             }
             // 默认走 Auto WB（若支持 D12）
             _ => {
@@ -853,11 +842,11 @@ pub fn uvc_init_camera_controls(
                     }
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 1);
                     let cur_t = try_get_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(0);
-                    usb_log_fmt(format_args!("UVC: PU.WB = Auto (cur {cur_t}K)"));
+                    log::info!("UVC: PU.WB = Auto (cur {cur_t}K)");
                 } else if (bm & (1 << 6)) != 0 {
                     let val = try_get_def_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(4500);
                     let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, val);
-                    usb_log_fmt(format_args!("UVC: PU.WB = {val}K (no-auto)"));
+                    log::info!("UVC: PU.WB = {val}K (no-auto)");
                 }
             }
         }
@@ -885,7 +874,7 @@ pub fn uvc_init_camera_controls(
                     break;
                 }
             }
-            usb_log_fmt(format_args!("UVC: CT.AeMode = {applied:#04x}"));
+            log::info!("UVC: CT.AeMode = {applied:#04x}");
 
             if (ent.ct_controls & (1 << 2)) != 0 {
                 let _ = try_set_cur_u8(
@@ -947,9 +936,7 @@ fn dump_probe(prefix: &str, p: &[u8]) {
     let delay = u16::from_le_bytes([p[16], p[17]]);
     let max_video = u32::from_le_bytes([p[18], p[19], p[20], p[21]]);
     let max_pkt = u32::from_le_bytes([p[22], p[23], p[24], p[25]]);
-    usb_log_fmt(format_args!(
-        "UVC: {prefix} bmHint={bm_hint:#06x} fmt={fmt_ix} frame={frame_ix} iv={interval} keyFrm={key_frm} pFrm={pframe} compQ={comp_q} compW={comp_w} delay={delay} dwMaxVideoFrameSize={max_video} dwMaxPayloadTransferSize={max_pkt}"
-    ));
+    log::info!("UVC: {prefix} bmHint={bm_hint:#06x} fmt={fmt_ix} frame={frame_ix} iv={interval} keyFrm={key_frm} pFrm={pframe} compQ={comp_q} compW={comp_w} delay={delay} dwMaxVideoFrameSize={max_video} dwMaxPayloadTransferSize={max_pkt}");
 }
 
 /// `PROBE` → `GET_CUR` → `COMMIT` → `SET_INTERFACE`。
@@ -1005,10 +992,8 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     let alt_mps = u32::from(sel.mps_raw & 0x7FF)
         * (u32::from((sel.mps_raw >> 11) & 0x3) + 1);
     if alt_mps > 0 && alt_mps < sel.negotiated_payload_size {
-        usb_log_fmt(format_args!(
-            "UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
-            sel.negotiated_payload_size, alt_mps
-        ));
+        log::info!("UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
+            sel.negotiated_payload_size, alt_mps);
         sel.negotiated_payload_size = alt_mps;
         probe[22..26].copy_from_slice(&alt_mps.to_le_bytes());
     }
@@ -1026,10 +1011,8 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
         ep0_mps,
     )?;
 
-    usb_log_fmt(format_args!(
-        "UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
-        sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, sel.negotiated_frame_size
-    ));
+    log::info!("UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
+        sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, sel.negotiated_frame_size);
 
     Ok(())
 }
@@ -1097,12 +1080,10 @@ fn process_packet(
 ) -> UsbResult<bool> {
     let (eof, payload_len, fid_opt, info) = parse_uvc_packet(pkt);
     if *debug_remaining > 0 {
-        usb_log_fmt(format_args!(
-            "UVC-pkt uf={} len={} hlen={} info={:#04x} fid={:?} eof={} payload={}",
+        log::info!("UVC-pkt uf={} len={} hlen={} info={:#04x} fid={:?} eof={} payload={}",
             dwc2_ep0::current_uframe(),
             pkt.len(), if pkt.is_empty() { 0 } else { pkt[0] as usize },
-            info, fid_opt, eof, payload_len
-        ));
+            info, fid_opt, eof, payload_len);
         *debug_remaining -= 1;
     }
     let Some(cur_fid) = fid_opt else {
@@ -1149,10 +1130,8 @@ fn process_packet_capturing(
                 .map(|t| t[0] == 0xff && t[1] == 0xd9)
                 .unwrap_or(false);
         if FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
-            usb_log_fmt(format_args!(
-                "UVC-trace FID-flip uf={} frame_fid={} new_fid={} saw_data={} jpeg_len={} has_eoi={}",
-                dwc2_ep0::current_uframe(), *frame_fid, cur_fid, *saw_data, *jpeg_len, has_eoi
-            ));
+            log::info!("UVC-trace FID-flip uf={} frame_fid={} new_fid={} saw_data={} jpeg_len={} has_eoi={}",
+                dwc2_ep0::current_uframe(), *frame_fid, cur_fid, *saw_data, *jpeg_len, has_eoi);
         }
         if *saw_data && has_eoi {
             return Ok(true);
@@ -1186,10 +1165,8 @@ fn process_packet_capturing(
             .unwrap_or(false);
     let frame_done = eof && *saw_data && has_eoi_now;
     if eof && FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
-        usb_log_fmt(format_args!(
-            "UVC-trace EOF uf={} fid={} info={:#04x} payload={} saw_data={} jpeg_len={} has_eoi={} done={}",
-            dwc2_ep0::current_uframe(), cur_fid, info, payload_len, *saw_data, *jpeg_len, has_eoi_now, frame_done
-        ));
+        log::info!("UVC-trace EOF uf={} fid={} info={:#04x} payload={} saw_data={} jpeg_len={} has_eoi={} done={}",
+            dwc2_ep0::current_uframe(), cur_fid, info, payload_len, *saw_data, *jpeg_len, has_eoi_now, frame_done);
     }
     if eof && *saw_data && !has_eoi_now {
         // 残帧（带 EOF 但无 EOI）：丢弃累积，回到 WaitFirstSwitch 等下一次 FID 翻转。
@@ -1269,7 +1246,7 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
                 let eof = process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)?;
                 if eof {
                     if frame_dbg {
-                        usb_log_fmt(format_args!("UVC: frame {} bytes ({} bulk transfers)", jpeg_len, transfers));
+                        log::info!("UVC: frame {} bytes ({} bulk transfers)", jpeg_len, transfers);
                     }
                     return Ok(jpeg_len);
                 }
@@ -1318,21 +1295,17 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
                         let uf_end = dwc2_ep0::current_uframe();
                         let dwait = uf_first_switch.wrapping_sub(uf_start) & 0xffff;
                         let dcap = uf_end.wrapping_sub(uf_first_switch) & 0xffff;
-                        usb_log_fmt(format_args!(
-                            "UVC: frame {} bytes ({} loops, {} data; HFNUM dwait={} uf ({}.{} ms / {} loops), dcap={} uf ({}.{} ms / {} loops), mult={})",
+                        log::info!("UVC: frame {} bytes ({} loops, {} data; HFNUM dwait={} uf ({}.{} ms / {} loops), dcap={} uf ({}.{} ms / {} loops), mult={})",
                             jpeg_len, transfers, data_transfers,
                             dwait, dwait / 8, (dwait % 8) * 125 / 10, uframes_at_switch,
                             dcap, dcap / 8, (dcap % 8) * 125 / 10, transfers - uframes_at_switch,
-                            mult
-                        ));
+                            mult);
                     }
                     return Ok(jpeg_len);
                 }
             }
-            usb_log_fmt(format_args!(
-                "UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
-                transfers, data_transfers, jpeg_len, mult
-            ));
+            log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
+                transfers, data_transfers, jpeg_len, mult);
             Err(UsbError::Timeout)
         }
     }

@@ -21,7 +21,7 @@ pub use controller::{
 };
 
 pub use ep0::{
-    bulk_in, bulk_out, current_uframe, debug_log_ep0_dma_info, dma_copy_out, dma_rx_slice,
+    bulk_in, bulk_out, current_uframe, dma_copy_out, dma_rx_slice,
     dma_write_at, ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
     ep0_control_write_no_data, get_device_vid_pid_default_addr, hub_clear_port_feature,
     hub_set_port_feature, isoch_in,

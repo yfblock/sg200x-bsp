@@ -7,7 +7,7 @@
 //! SG2002 芯片的引脚复用系统包含两类寄存器:
 //!
 //! 1. **FMUX (Function Mux) 寄存器**: 用于选择引脚的功能模式
-//!    - 基地址: 0x0300_1000
+//!    - 基地址: [`crate::soc::FMUX_BASE`]
 //!    - 每个引脚可以选择多种功能(如 GPIO、UART、SPI、I2C 等)
 //!
 //! 2. **IOBLK (IO Block) 寄存器**: 用于配置引脚的电气特性
@@ -48,23 +48,9 @@ pub use ioblk::*;
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-/// FMUX 寄存器基地址
-pub const FMUX_BASE: usize = 0x0300_1000;
-
-/// IOBLK G1 组寄存器基地址
-pub const IOBLK_G1_BASE: usize = 0x0300_1800;
-
-/// IOBLK G7 组寄存器基地址
-pub const IOBLK_G7_BASE: usize = 0x0300_1900;
-
-/// IOBLK G10 组寄存器基地址
-pub const IOBLK_G10_BASE: usize = 0x0300_1A00;
-
-/// IOBLK G12 组寄存器基地址
-pub const IOBLK_G12_BASE: usize = 0x0300_1C00;
-
-/// IOBLK GRTC 组寄存器基地址
-pub const IOBLK_GRTC_BASE: usize = 0x0502_7000;
+pub use crate::soc::{
+    FMUX_BASE, IOBLK_G10_BASE, IOBLK_G12_BASE, IOBLK_G1_BASE, IOBLK_G7_BASE, IOBLK_GRTC_BASE,
+};
 
 /// 上拉/下拉配置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

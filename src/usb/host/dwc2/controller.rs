@@ -12,8 +12,10 @@
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::platform;
+use crate::usb;
 #[allow(unused_imports)]
+use crate::soc::CV182X_USB2_PHY_BASE;
+
 use super::mmio;
 #[allow(unused_imports)]
 use super::regs::{
@@ -23,14 +25,14 @@ use super::regs::{
 
 #[inline]
 fn base() -> usize {
-    platform::dwc2_base_virt()
+    usb::dwc2_base_virt()
 }
 
 /// 返回 DWC2 寄存器视图；前置已检查 base != 0 时使用。未设置时 panic（`pub` 入口
 /// 在外层先做 [`base`] 校验）。
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call platform::set_dwc2_base_virt)")
+    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
@@ -48,14 +50,10 @@ fn dbg_dwc2_init_timeout(phase: &'static str) {
     let rst_done = r.grstctl.is_set(GRSTCTL::CSFTRST_DONE);
     let rx_flush = r.grstctl.is_set(GRSTCTL::RXFFLSH);
     let tx_flush = r.grstctl.is_set(GRSTCTL::TXFFLSH);
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT dwc2-init [{}] GRSTCTL={:#010x} AHBIDLE={} CSFTRST={} CSFTRST_DONE={} RXFFLSH={} TXFFLSH={}",
-        phase, grst, ahb_idle, csftrst, rst_done, rx_flush, tx_flush
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
-        phase, gint, gahb, hprt
-    ));
+    log::warn!("USB-TOUT dwc2-init [{}] GRSTCTL={:#010x} AHBIDLE={} CSFTRST={} CSFTRST_DONE={} RXFFLSH={} TXFFLSH={}",
+        phase, grst, ahb_idle, csftrst, rst_done, rx_flush, tx_flush);
+    log::warn!("USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
+        phase, gint, gahb, hprt);
 }
 
 // Linux `core.h`：`snpsid >= 0x4f54291a` 时配置 `GDFIFOCFG`（`hcd.c`）。
@@ -77,7 +75,7 @@ fn spin_delay(iterations: u32) {
 /// `Ok((GHWCFG1, GHWCFG2, GHWCFG3))` 原始寄存器值；基址未设或读全零则返回 [`UsbError::Hardware`]。
 pub unsafe fn dwc2_probe() -> UsbResult<(u32, u32, u32)> {
     if base() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call platform::set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
     }
     let r = regs();
     let h1 = r.ghwcfg1.get();
@@ -303,7 +301,7 @@ pub fn hprt_lnsts(hprt: u32) -> u32 {
 /// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
 pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     if base() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call platform::set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
     }
     let r = regs();
     let cur = r.hprt0.get();
@@ -326,8 +324,7 @@ pub fn debug_dump_root_port_hw(tag: &str) {
     let r = regs();
     let hprt = r.hprt0.get();
     let ln = hprt_lnsts(hprt);
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG {} HPRT0={:#010x} LNSTS={} CONNSTS={} CONNDET={} RST={} PWR={} SPD={}",
+    log::debug!("USB-DBG {} HPRT0={:#010x} LNSTS={} CONNSTS={} CONNDET={} RST={} PWR={} SPD={}",
         tag,
         hprt,
         ln,
@@ -335,60 +332,47 @@ pub fn debug_dump_root_port_hw(tag: &str) {
         (hprt >> 1) & 1,
         (hprt >> 8) & 1,
         (hprt >> 12) & 1,
-        hprt_speed_bits(hprt),
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG {} GOTGCTL={:#010x} GUSBCFG={:#010x} GAHBCFG={:#010x}",
+        hprt_speed_bits(hprt),);
+    log::debug!("USB-DBG {} GOTGCTL={:#010x} GUSBCFG={:#010x} GAHBCFG={:#010x}",
         tag,
         r.gotgctl.get(),
         r.gusbcfg.get(),
-        r.gahbcfg.get()
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG {} GINTSTS={:#010x} PCGCTL={:#010x} HCFG={:#010x}",
+        r.gahbcfg.get());
+    log::debug!("USB-DBG {} GINTSTS={:#010x} PCGCTL={:#010x} HCFG={:#010x}",
         tag,
         r.gintsts.get(),
         r.pcgctl.get(),
-        r.hcfg.get()
-    ));
+        r.hcfg.get());
     #[cfg(feature = "cv182x-host")]
     {
-        let phy = CV182X_USB2_PHY_MMIO;
+        let phy = CV182X_USB2_PHY_BASE;
         unsafe {
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-PHY {} 00={:#010x} 04={:#010x} 08={:#010x} 0c={:#010x}",
+            log::debug!("USB-PHY {} 00={:#010x} 04={:#010x} 08={:#010x} 0c={:#010x}",
                 tag,
                 mmio::read32(phy + 0x00),
                 mmio::read32(phy + 0x04),
                 mmio::read32(phy + 0x08),
-                mmio::read32(phy + 0x0c),
-            ));
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-PHY {} 10={:#010x} 14={:#010x} 18={:#010x} 1c={:#010x}",
+                mmio::read32(phy + 0x0c),);
+            log::debug!("USB-PHY {} 10={:#010x} 14={:#010x} 18={:#010x} 1c={:#010x}",
                 tag,
                 mmio::read32(phy + 0x10),
                 mmio::read32(phy + 0x14),
                 mmio::read32(phy + 0x18),
-                mmio::read32(phy + 0x1c),
-            ));
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-PHY {} 20={:#010x} 24={:#010x} 28={:#010x} 2c={:#010x}",
+                mmio::read32(phy + 0x1c),);
+            log::debug!("USB-PHY {} 20={:#010x} 24={:#010x} 28={:#010x} 2c={:#010x}",
                 tag,
                 mmio::read32(phy + 0x20),
                 mmio::read32(phy + 0x24),
                 mmio::read32(phy + 0x28),
-                mmio::read32(phy + 0x2c),
-            ));
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-PHY {} 30={:#010x} 3c={:#010x} 40={:#010x} 48={:#010x} 4c={:#010x} 50={:#010x}",
+                mmio::read32(phy + 0x2c),);
+            log::debug!("USB-PHY {} 30={:#010x} 3c={:#010x} 40={:#010x} 48={:#010x} 4c={:#010x} 50={:#010x}",
                 tag,
                 mmio::read32(phy + 0x30),
                 mmio::read32(phy + 0x3c),
                 mmio::read32(phy + 0x40),
                 mmio::read32(phy + 0x48),
                 mmio::read32(phy + 0x4c),
-                mmio::read32(phy + 0x50),
-            ));
+                mmio::read32(phy + 0x50),);
         }
     }
 }
@@ -505,10 +489,8 @@ fn init_gusbcfg_cv182x_utmi16_hs() {
     let r = regs();
     let utmi_w = r.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
     let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
-        if want_16bit { 1 } else { 0 }
-    ));
+    log::debug!("USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
+        if want_16bit { 1 } else { 0 });
     let mut field = GUSBCFG::FORCEHOSTMODE::SET
         + GUSBCFG::ULPI_UTMI_SEL::CLEAR
         + GUSBCFG::TOUTCAL.val(0x7);
@@ -533,15 +515,9 @@ fn init_gahb_dma_cv182x() {
     #[cfg(feature = "usb-force-no-dma")]
     {
         r.gahbcfg.modify(GAHBCFG::DMA_EN::CLEAR);
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DBG usb-force-no-dma: DMA_EN cleared (ARCH={arch}, expect fail on int-DMA IP)"
-        ));
+        log::warn!("USB-DBG usb-force-no-dma: DMA_EN cleared (ARCH={arch}, expect fail on int-DMA IP)");
     }
 }
-
-/// CV182x 片内 USB2 PHY（与 Linux `usb@04340000` 第二段 `reg` 一致）。`REG014` 见 `dwc2/platform.c`。
-#[cfg(feature = "cv182x-host")]
-const CV182X_USB2_PHY_MMIO: usize = 0x0300_6000;
 
 /// 与厂商 Linux `platform.c` host 路径对齐：**不设 `UTMI_OVERRIDE`**。
 ///
@@ -557,10 +533,8 @@ fn cv182x_usb2_phy_host_clear_utmi_override() {
     phy.reg014.set(0);
     spin_delay(200_000);
     let now = phy.reg014.get();
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
-        old, now
-    ));
+    log::debug!("USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
+        old, now);
 }
 
 /// Linux 在 `speed == HS` 时**不**置 `HCFG_FSLSSUPP`；RPi/全速演示才需要 FSLS。
@@ -578,7 +552,7 @@ fn hcfg_clear_fs_ls_for_high_speed() {
 /// 成功返回 Ok，不保证已有设备连接；请读 [`dwc2_hprt0_read`] 的 `CONNSTS`。
 pub fn dwc2_host_init() -> UsbResult<()> {
     if base() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call platform::set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
     }
     let r = regs();
     r.gintmsk.set(0);
