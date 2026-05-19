@@ -7,12 +7,13 @@
 //! - 总线保持器 (HE)
 //! - 转换速率限制 (SL)
 //!
-//! 不同 IO 组的寄存器基地址（见 [`crate::soc`]）:
-//! - G1:   [`crate::soc::IOBLK_G1_BASE`]
-//! - G7:   [`crate::soc::IOBLK_G7_BASE`]
-//! - G10:  [`crate::soc::IOBLK_G10_BASE`]
-//! - G12:  [`crate::soc::IOBLK_G12_BASE`]
-//! - GRTC: [`crate::soc::IOBLK_GRTC_BASE`]
+//! Active Domain 各组相对 [`crate::soc::IOBLK_BASE`] 的偏移（见 [`crate::soc::IOBLK_G*_OFFSET`]）:
+//! - G1:   +0x000
+//! - G7:   +0x100
+//! - G10:  +0x200
+//! - G12:  +0x400
+//!
+//! RTC 域 GRTC 独立基址: [`crate::soc::IOBLK_GRTC_BASE`]
 
 use tock_registers::{
     interfaces::{ReadWriteable, Readable, Writeable},
@@ -94,7 +95,7 @@ register_bitfields! [
 ];
 
 // ============================================================================
-// IOBLK G1 组寄存器（基地址 [`crate::soc::IOBLK_G1_BASE`]）
+// IOBLK G1 组寄存器（[`crate::soc::IOBLK_BASE`] + [`crate::soc::IOBLK_G1_OFFSET`]）
 // ============================================================================
 
 register_structs! {
@@ -145,7 +146,7 @@ register_structs! {
 }
 
 // ============================================================================
-// IOBLK G7 组寄存器（基地址 [`crate::soc::IOBLK_G7_BASE`]）
+// IOBLK G7 组寄存器（[`crate::soc::IOBLK_BASE`] + [`crate::soc::IOBLK_G7_OFFSET`]）
 // ============================================================================
 
 register_structs! {
@@ -226,7 +227,7 @@ register_structs! {
 }
 
 // ============================================================================
-// IOBLK G10 组寄存器（基地址 [`crate::soc::IOBLK_G10_BASE`]）
+// IOBLK G10 组寄存器（[`crate::soc::IOBLK_BASE`] + [`crate::soc::IOBLK_G10_OFFSET`]）
 // ============================================================================
 
 register_structs! {
@@ -268,7 +269,7 @@ register_structs! {
 }
 
 // ============================================================================
-// IOBLK G12 组寄存器（基地址 [`crate::soc::IOBLK_G12_BASE`]）
+// IOBLK G12 组寄存器（[`crate::soc::IOBLK_BASE`] + [`crate::soc::IOBLK_G12_OFFSET`]）
 // ============================================================================
 
 register_structs! {

@@ -39,10 +39,11 @@
 //! # PWM 使用示例
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::pwm::{Pwm, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::soc::PWM0_BASE;
 //!
 //! // 创建 PWM0 控制器驱动实例
-//! let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+//! let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
 //!
 //! // 配置通道 0: 1KHz, 50% 占空比
 //! pwm.configure_channel(

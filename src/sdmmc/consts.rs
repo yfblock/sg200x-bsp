@@ -12,16 +12,9 @@ use tock_registers::{register_bitfields, register_structs, registers::ReadWrite}
 
 pub use crate::soc::{SD_DRIVER_BASE, TOP_BASE};
 
-/// 与 [`crate::soc::SOFT_RST_BASE`] 同址（历史拼写 `REST`）
-pub const SOFT_REST_BASE_ADDR: usize = crate::soc::SOFT_RST_BASE;
-
 // ============================================================================
 // TOP 模块寄存器偏移
 // ============================================================================
-
-/// SD 电源开关控制寄存器偏移
-/// 用于控制 SD 卡的电源电压切换
-pub const REG_TOP_SD_PWRSW_CTRL: usize = 0x1F4;
 
 /// 块大小
 pub const BLOCK_SIZE: usize = 0x200;

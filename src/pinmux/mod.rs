@@ -22,8 +22,11 @@
 //!
 //! ```rust,ignore
 //! use sg200x_bsp::pinmux::{Pinmux, PullConfig, FMUX_SD0_CLK, FMUX_UART0_TX};
+//! use sg200x_bsp::soc::{
+//!     FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE,
+//! };
 //!
-//! let pinmux = Pinmux::new();
+//! let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
 //!
 //! // SD0_CLK → XGPIOA[7]
 //! pinmux.set_sd0_clk_func(FMUX_SD0_CLK::FSEL::XGPIOA_7);
@@ -49,7 +52,8 @@ pub use ioblk::*;
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 pub use crate::soc::{
-    FMUX_BASE, IOBLK_G10_BASE, IOBLK_G12_BASE, IOBLK_G1_BASE, IOBLK_G7_BASE, IOBLK_GRTC_BASE,
+    FMUX_BASE, IOBLK_BASE, IOBLK_G1_OFFSET, IOBLK_G10_OFFSET, IOBLK_G12_OFFSET, IOBLK_G7_OFFSET,
+    IOBLK_GRTC_BASE,
 };
 
 /// 上拉/下拉配置
@@ -120,65 +124,25 @@ pub struct Pinmux {
 impl Pinmux {
     /// 创建新的 Pinmux 驱动实例
     ///
-    /// # Safety
+    /// # 参数
     ///
-    /// 调用者必须确保:
-    /// - 寄存器地址有效且可访问
-    /// - 不会创建多个实例导致数据竞争
-    pub fn new() -> Self {
-        unsafe {
-            Self {
-                fmux: &*(FMUX_BASE as *const FmuxRegisters),
-                ioblk_g1: &*(IOBLK_G1_BASE as *const IoblkG1Registers),
-                ioblk_g7: &*(IOBLK_G7_BASE as *const IoblkG7Registers),
-                ioblk_g10: &*(IOBLK_G10_BASE as *const IoblkG10Registers),
-                ioblk_g12: &*(IOBLK_G12_BASE as *const IoblkG12Registers),
-                ioblk_grtc: &*(IOBLK_GRTC_BASE as *const IoblkGrtcRegisters),
-            }
-        }
-    }
-
-    /// 创建新的 Pinmux 驱动实例
+    /// - `fmux_base`: FMUX 寄存器 MMIO 基地址（见 [`FMUX_BASE`]）
+    /// - `ioblk_base`: Active Domain IOBLK 基地址（见 [`IOBLK_BASE`]，G1/G7/G10/G12 按 [`IOBLK_G*_OFFSET`] 寻址）
+    /// - `ioblk_grtc_base`: RTC 域 IOBLK GRTC 基地址（见 [`IOBLK_GRTC_BASE`]）
     ///
     /// # Safety
     ///
     /// 调用者必须确保:
-    /// - 寄存器地址有效且可访问
+    /// - 所有基地址有效且可访问
     /// - 不会创建多个实例导致数据竞争
-    pub fn new_with_offset(offset: usize) -> Self {
-        unsafe {
-            Self {
-                fmux: &*((FMUX_BASE + offset) as *const FmuxRegisters),
-                ioblk_g1: &*((IOBLK_G1_BASE + offset) as *const IoblkG1Registers),
-                ioblk_g7: &*((IOBLK_G7_BASE + offset) as *const IoblkG7Registers),
-                ioblk_g10: &*((IOBLK_G10_BASE + offset) as *const IoblkG10Registers),
-                ioblk_g12: &*((IOBLK_G12_BASE + offset) as *const IoblkG12Registers),
-                ioblk_grtc: &*((IOBLK_GRTC_BASE + offset) as *const IoblkGrtcRegisters),
-            }
-        }
-    }
-
-
-    /// 从指定基地址创建 Pinmux 驱动实例
-    ///
-    /// # Safety
-    ///
-    /// 调用者必须确保所有基地址有效且可访问
-    pub unsafe fn from_base_addresses(
-        fmux_base: usize,
-        ioblk_g1_base: usize,
-        ioblk_g7_base: usize,
-        ioblk_g10_base: usize,
-        ioblk_g12_base: usize,
-        ioblk_grtc_base: usize,
-    ) -> Self {
+    pub unsafe fn new(fmux_base: usize, ioblk_base: usize, ioblk_grtc_base: usize) -> Self {
         unsafe {
             Self {
                 fmux: &*(fmux_base as *const FmuxRegisters),
-                ioblk_g1: &*(ioblk_g1_base as *const IoblkG1Registers),
-                ioblk_g7: &*(ioblk_g7_base as *const IoblkG7Registers),
-                ioblk_g10: &*(ioblk_g10_base as *const IoblkG10Registers),
-                ioblk_g12: &*(ioblk_g12_base as *const IoblkG12Registers),
+                ioblk_g1: &*((ioblk_base + IOBLK_G1_OFFSET) as *const IoblkG1Registers),
+                ioblk_g7: &*((ioblk_base + IOBLK_G7_OFFSET) as *const IoblkG7Registers),
+                ioblk_g10: &*((ioblk_base + IOBLK_G10_OFFSET) as *const IoblkG10Registers),
+                ioblk_g12: &*((ioblk_base + IOBLK_G12_OFFSET) as *const IoblkG12Registers),
                 ioblk_grtc: &*(ioblk_grtc_base as *const IoblkGrtcRegisters),
             }
         }
@@ -212,12 +176,6 @@ impl Pinmux {
     /// 获取 IOBLK GRTC 组寄存器的引用
     pub fn ioblk_grtc(&self) -> &IoblkGrtcRegisters {
         self.ioblk_grtc
-    }
-}
-
-impl Default for Pinmux {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -426,7 +384,8 @@ impl Pinmux {
     ///
     /// # 示例
     /// ```ignore
-    /// let pinmux = unsafe { Pinmux::new() };
+    /// use sg200x_bsp::soc::{FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE};
+    /// let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
     /// pinmux.set_iic3_scl_on_sd1_cmd();
     /// ```
     pub fn set_iic3_scl_on_sd1_cmd(&self) {
@@ -440,7 +399,7 @@ impl Pinmux {
     ///
     /// # 示例
     /// ```ignore
-    /// let pinmux = unsafe { Pinmux::new() };
+    /// let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
     /// pinmux.set_iic3_sda_on_sd1_clk();
     /// ```
     pub fn set_iic3_sda_on_sd1_clk(&self) {
@@ -455,7 +414,7 @@ impl Pinmux {
     ///
     /// # 示例
     /// ```ignore
-    /// let pinmux = unsafe { Pinmux::new() };
+    /// let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
     /// pinmux.setup_iic3_pins();
     /// ```
     pub fn setup_iic3_pins(&self) {

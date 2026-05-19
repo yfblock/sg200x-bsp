@@ -186,25 +186,16 @@ pub struct Rstc {
 impl Rstc {
     /// 创建新的复位控制器驱动实例
     ///
+    /// # 参数
+    ///
+    /// - `base`: 复位控制器 MMIO 基地址（见 [`RSTC_BASE`]）
+    ///
     /// # Safety
     ///
     /// 调用者必须确保:
     /// - 寄存器地址有效且可访问
     /// - 不会创建多个实例导致数据竞争
-    pub unsafe fn new() -> Self {
-        unsafe {
-            Self {
-                regs: &*(RSTC_BASE as *const RstcRegisters),
-            }
-        }
-    }
-
-    /// 从指定基地址创建复位控制器驱动实例
-    ///
-    /// # Safety
-    ///
-    /// 调用者必须确保基地址有效且可访问
-    pub unsafe fn from_base_address(base: usize) -> Self {
+    pub unsafe fn new(base: usize) -> Self {
         unsafe {
             Self {
                 regs: &*(base as *const RstcRegisters),

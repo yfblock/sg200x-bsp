@@ -28,10 +28,11 @@
 //! ### 连续输出模式
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::pwm::{Pwm, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::soc::PWM0_BASE;
 //!
 //! // 创建 PWM0 控制器驱动实例
-//! let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+//! let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
 //!
 //! // 配置通道 0: 1KHz, 50% 占空比
 //! pwm.configure_channel(
@@ -59,9 +60,10 @@
 //! ### 固定脉冲数输出模式
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::pwm::{Pwm, PwmChannel, PwmMode, PwmPolarity};
+//! use sg200x_bsp::soc::PWM0_BASE;
 //!
-//! let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+//! let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
 //!
 //! // 配置通道 0: 1MHz, 75% 占空比
 //! pwm.configure_channel(
@@ -86,9 +88,10 @@
 //! ### 同步输出模式
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmPolarity};
+//! use sg200x_bsp::pwm::{Pwm, PwmChannel, PwmPolarity};
+//! use sg200x_bsp::soc::PWM0_BASE;
 //!
-//! let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+//! let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
 //!
 //! // 配置 4 路相同频率和占空比
 //! let freq = 1_000; // 1KHz
@@ -123,7 +126,7 @@ pub use consts::{
     PWM_DEFAULT_CLK_FREQ, PWM_MAX_PERIOD, PWM_MAX_PULSE_COUNT, PWM_MAX_SHIFT_COUNT,
 };
 pub use instances::{
-    GlobalPwmChannel, PwmInstance, PWM0_BASE, PWM1_BASE, PWM2_BASE, PWM3_BASE,
+    pwm_controller_base, GlobalPwmChannel, PWM0_BASE, PWM1_BASE, PWM2_BASE, PWM3_BASE,
 };
 
 use consts::*;
@@ -136,8 +139,6 @@ use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 pub struct Pwm {
     /// PWM 寄存器组引用
     regs: &'static PwmRegisters,
-    /// PWM 实例标识
-    instance: PwmInstance,
     /// 时钟源
     clock_source: PwmClockSource,
 }
@@ -152,31 +153,23 @@ impl Pwm {
     /// - 不会创建多个相同实例导致数据竞争
     ///
     /// # 参数
-    /// - `instance`: PWM 实例标识符
-    pub fn new(instance: PwmInstance) -> Self {
-        Self::new_with_offset(instance, 0)
-    }
-
-    pub fn new_with_offset(instance: PwmInstance, offset: usize) -> Self {
-        let base = instance.base_address();
-        Self {
-            regs: unsafe { &*((base + offset) as *const PwmRegisters) },
-            instance,
-            clock_source: PwmClockSource::Clk100MHz,
-        }
-    }
-
-
-    /// 从指定基地址创建 PWM 驱动实例
     ///
-    /// # Safety
+    /// - `base`: PWM 控制器 MMIO 基地址（见 [`PWM0_BASE`] 等）
     ///
-    /// 调用者必须确保基地址有效且可访问
-    pub unsafe fn from_base_address(base: usize, instance: PwmInstance) -> Self {
-        Self {
-            regs: unsafe { &*(base as *const PwmRegisters) },
-            instance,
-            clock_source: PwmClockSource::Clk100MHz,
+    /// # 示例
+    ///
+    /// ```rust,ignore
+    /// use sg200x_bsp::pwm::Pwm;
+    /// use sg200x_bsp::soc::PWM0_BASE;
+    ///
+    /// let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
+    /// ```
+    pub unsafe fn new(base: usize) -> Self {
+        unsafe {
+            Self {
+                regs: &*(base as *const PwmRegisters),
+                clock_source: PwmClockSource::Clk100MHz,
+            }
         }
     }
 
@@ -188,11 +181,6 @@ impl Pwm {
     /// 获取时钟源
     pub fn clock_source(&self) -> PwmClockSource {
         self.clock_source
-    }
-
-    /// 获取 PWM 实例标识
-    pub fn instance(&self) -> PwmInstance {
-        self.instance
     }
 
     /// 获取时钟频率
