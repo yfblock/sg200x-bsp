@@ -42,14 +42,15 @@ sg200x-bsp = "0.5"
 
 ### Pinmux 与 FMUX
 
-引脚数字功能由 **FMUX**（基地址见 `soc::FMUX_BASE` / `pinmux::FMUX_BASE`）的 **FSEL** 位选择；上拉/下拉等由 **IOBLK** 各组寄存器配置（基址见 `soc::IOBLK_*_BASE`）。**I2C3** 的 SCL/SDA 分别复用在 **SD1_CMD** / **SD1_CLK**（FSEL = 2），可用 `Pinmux::setup_iic3_pins()` 一次配置。
+引脚数字功能由 **FMUX**（基地址见 `soc::FMUX_BASE`）的 **FSEL** 位选择；上拉/下拉等由 **IOBLK** 配置（Active Domain 见 `soc::IOBLK_BASE` + `IOBLK_G*_OFFSET`，RTC 域见 `IOBLK_GRTC_BASE`）。**I2C3** 的 SCL/SDA 分别复用在 **SD1_CMD** / **SD1_CLK**（FSEL = 2），可用 `Pinmux::setup_iic3_pins()` 一次配置。
 
 ```rust
 #![no_std]
 
 use sg200x_bsp::pinmux::{Pinmux, PullConfig, FMUX_UART0_TX};
+use sg200x_bsp::soc::{FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE};
 
-let pinmux = Pinmux::new();
+let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
 
 // 将 UART0_TX 保持为默认 UART 功能，并配置上拉
 pinmux.set_uart0_tx_func(FMUX_UART0_TX::FSEL::UART0_TX);
@@ -93,10 +94,11 @@ i2c.write_read(slave_addr, &reg_addr, &mut buf).unwrap();
 ```rust
 #![no_std]
 
-use sg200x_bsp::pwm::{Pwm, PwmInstance, PwmChannel, PwmMode, PwmPolarity};
+use sg200x_bsp::pwm::{Pwm, PwmChannel, PwmMode, PwmPolarity};
+use sg200x_bsp::soc::PWM0_BASE;
 
 // 创建 PWM0 控制器驱动实例
-let mut pwm = unsafe { Pwm::new(PwmInstance::Pwm0) };
+let mut pwm = unsafe { Pwm::new(PWM0_BASE) };
 
 // 配置通道 0: 1KHz, 50% 占空比
 pwm.configure_channel(
@@ -116,11 +118,13 @@ pwm.start(PwmChannel::Channel0);
 ```rust
 #![no_std]
 
-use sg200x_bsp::mp::start_secondary_core;
+use sg200x_bsp::mp::SecSys;
+use sg200x_bsp::soc::SEC_SYS_BASE;
 
 // 启动协处理器 (小核 C906@700MHz)
+let sec_sys = unsafe { SecSys::new(SEC_SYS_BASE) };
 unsafe {
-    start_secondary_core(entry_address);
+    sec_sys.start_secondary_core(entry_address);
 }
 ```
 

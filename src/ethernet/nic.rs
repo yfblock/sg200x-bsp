@@ -214,7 +214,7 @@ impl CvitekEthNic {
             core::ptr::write_volatile(clk_en0, v | CLKEN0_ETH_MASK);
         }
 
-        let rstc = unsafe { crate::rstc::Rstc::new() };
+        let rstc = unsafe { crate::rstc::Rstc::new(crate::rstc::RSTC_BASE) };
         let regs = rstc.regs();
 
         let v0 = regs.soft_rstn_0.get();

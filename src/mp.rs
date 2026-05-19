@@ -15,25 +15,21 @@
 //!
 //! ## 相关寄存器
 //!
-//! | 地址 | 名称 | 描述 |
+//! | 偏移（相对 [`SEC_SYS_BASE`]） | 名称 | 描述 |
 //! |------|------|------|
-//! | [`crate::soc::SOFT_CPU_RSTN_ADDR`] | SOFT_CPU_RSTN | CPU 软复位控制寄存器 |
-//! | [`crate::soc::SEC_SYS_CTRL_ADDR`] | SEC_SYS_CTRL | 安全子系统控制寄存器 |
-//! | [`crate::soc::SEC_SYS_BOOT_ADDR_L_ADDR`] | SEC_SYS_BOOT_ADDR_L | 协处理器启动地址低 32 位 |
-//! | [`crate::soc::SEC_SYS_BOOT_ADDR_H_ADDR`] | SEC_SYS_BOOT_ADDR_H | 协处理器启动地址高 32 位 |
+//! | 0x004 | SEC_SYS_CTRL | 安全子系统控制寄存器 |
+//! | 0x020 | SEC_SYS_BOOT_ADDR_L | 协处理器启动地址低 32 位 |
+//! | 0x024 | SEC_SYS_BOOT_ADDR_H | 协处理器启动地址高 32 位 |
+//!
+//! CPU 软复位见 [`crate::rstc`]（[`crate::soc::RSTC_BASE`] + 0x024，`SOFT_CPU_RSTN`）。
 //!
 //! ## 使用示例
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::mp::{SecSys, start_secondary_core};
+//! use sg200x_bsp::mp::SecSys;
+//! use sg200x_bsp::soc::SEC_SYS_BASE;
 //!
-//! // 方式 1: 使用便捷函数
-//! unsafe {
-//!     start_secondary_core(entry_address);
-//! }
-//!
-//! // 方式 2: 使用 SecSys 驱动
-//! let sec_sys = unsafe { SecSys::new() };
+//! let sec_sys = unsafe { SecSys::new(SEC_SYS_BASE) };
 //! unsafe {
 //!     sec_sys.start_secondary_core(entry_address);
 //! }
@@ -45,10 +41,7 @@ use tock_registers::{register_bitfields, register_structs, registers::ReadWrite}
 
 use crate::rstc::{Rstc, RSTC_BASE};
 
-pub use crate::soc::{
-    SEC_SYS_BASE, SEC_SYS_BOOT_ADDR_H_ADDR, SEC_SYS_BOOT_ADDR_L_ADDR, SEC_SYS_CTRL_ADDR,
-    SOFT_CPU_RSTN_ADDR,
-};
+pub use crate::soc::SEC_SYS_BASE;
 
 // ============================================================================
 // 寄存器位域定义 (使用 tock-registers)
@@ -120,25 +113,16 @@ pub struct SecSys {
 impl SecSys {
     /// 创建新的安全子系统驱动实例
     ///
+    /// # 参数
+    ///
+    /// - `base`: 安全子系统 MMIO 基地址（见 [`SEC_SYS_BASE`]）
+    ///
     /// # Safety
     ///
     /// 调用者必须确保:
     /// - 寄存器地址有效且可访问
     /// - 不会创建多个实例导致数据竞争
-    pub unsafe fn new() -> Self {
-        unsafe {
-            Self {
-                regs: &*(SEC_SYS_BASE as *const SecSysRegisters),
-            }
-        }
-    }
-
-    /// 从指定基地址创建安全子系统驱动实例
-    ///
-    /// # Safety
-    ///
-    /// 调用者必须确保基地址有效且可访问
-    pub unsafe fn from_base_address(base: usize) -> Self {
+    pub unsafe fn new(base: usize) -> Self {
         unsafe {
             Self {
                 regs: &*(base as *const SecSysRegisters),
@@ -205,7 +189,7 @@ impl SecSys {
     /// - 协处理器的内存区域已正确配置
     pub unsafe fn start_secondary_core(&self, entry: u64) {
         unsafe {
-            let rstc = Rstc::from_base_address(RSTC_BASE);
+            let rstc = Rstc::new(RSTC_BASE);
 
             // 1. 将协处理器 (CPUSYS2) 置于复位状态
             rstc.assert_cpu_sys_reset(2);
@@ -252,112 +236,5 @@ impl SecSys {
     /// 获取寄存器组引用
     pub fn regs(&self) -> &'static SecSysRegisters {
         self.regs
-    }
-}
-
-// ============================================================================
-// 便捷函数
-// ============================================================================
-
-/// 启动协处理器 (小核 C906@700MHz)
-///
-/// 这是一个便捷函数，封装了 `SecSys::start_secondary_core`
-///
-/// # 参数
-/// - `entry`: 协处理器启动入口地址 (物理地址)
-///
-/// # Safety
-///
-/// 调用者必须确保:
-/// - 启动地址有效且包含有效的可执行代码
-/// - 协处理器的内存区域已正确配置
-///
-/// # 示例
-///
-/// ```rust,ignore
-/// use sg200x_bsp::mp::start_secondary_core;
-///
-/// // 假设 _secondary_entry 是协处理器的入口函数
-/// extern "C" {
-///     fn _secondary_entry();
-/// }
-///
-/// unsafe {
-///     let entry_addr = _secondary_entry as *const () as u64;
-///     start_secondary_core(entry_addr);
-/// }
-/// ```
-pub unsafe fn start_secondary_core(entry: u64) {
-    unsafe {
-        let sec_sys = SecSys::new();
-        sec_sys.start_secondary_core(entry);
-    }
-}
-
-/// 使用原始寄存器地址启动协处理器
-///
-/// 此函数直接操作寄存器，不依赖 `Rstc` 和 `SecSys` 结构体。
-/// 适用于需要更底层控制的场景。
-///
-/// # 参数
-/// - `entry`: 协处理器启动入口地址 (物理地址)
-///
-/// # Safety
-///
-/// 调用者必须确保:
-/// - 启动地址有效且包含有效的可执行代码
-/// - 协处理器的内存区域已正确配置
-/// - 寄存器地址可访问
-pub unsafe fn start_secondary_core_raw(entry: u64) {
-    unsafe {
-        // 复位控制寄存器地址
-        let rst_ptr = SOFT_CPU_RSTN_ADDR as *mut u32;
-        // 安全子系统控制寄存器地址
-        let sec_ctrl_ptr = SEC_SYS_CTRL_ADDR as *mut u32;
-        // 启动地址低 32 位寄存器
-        let boot_addr_l_ptr = SEC_SYS_BOOT_ADDR_L_ADDR as *mut u32;
-        // 启动地址高 32 位寄存器
-        let boot_addr_h_ptr = SEC_SYS_BOOT_ADDR_H_ADDR as *mut u32;
-
-        // CPUSYS2 (小核) 的位掩码 (bit 6)
-        const CPUSYS2_MASK: u32 = 1 << 6;
-        // SEC_CPU_EN 的位掩码 (bit 13)
-        const SEC_CPU_EN_MASK: u32 = 1 << 13;
-
-        // 1. 将协处理器置于复位状态 (写 0 到 bit 6)
-        let rst_val = rst_ptr.read_volatile();
-        rst_ptr.write_volatile(rst_val & !CPUSYS2_MASK);
-
-        // 2. 使能协处理器 (写 1 到 bit 13)
-        let ctrl_val = sec_ctrl_ptr.read_volatile();
-        sec_ctrl_ptr.write_volatile(ctrl_val | SEC_CPU_EN_MASK);
-
-        // 3. 设置启动地址
-        boot_addr_l_ptr.write_volatile(entry as u32);
-        boot_addr_h_ptr.write_volatile((entry >> 32) as u32);
-
-        // 4. 执行内存屏障
-        #[cfg(any(target_arch = "riscv64", target_arch = "riscv32"))]
-        {
-            core::arch::asm!("fence.i");
-        }
-        #[cfg(not(any(target_arch = "riscv64", target_arch = "riscv32")))]
-        {
-            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        }
-
-        // 5. 解除复位，启动协处理器 (写 1 到 bit 6)
-        let rst_val = rst_ptr.read_volatile();
-        rst_ptr.write_volatile(rst_val | CPUSYS2_MASK);
-
-        // 6. 再次执行内存屏障
-        #[cfg(any(target_arch = "riscv64", target_arch = "riscv32"))]
-        {
-            core::arch::asm!("fence.i");
-        }
-        #[cfg(not(any(target_arch = "riscv64", target_arch = "riscv32")))]
-        {
-            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        }
     }
 }

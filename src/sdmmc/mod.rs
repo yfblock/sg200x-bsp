@@ -15,8 +15,10 @@
 //! ```rust,ignore
 //! use sg200x_bsp::sdmmc::{Sdmmc, PowerLevel};
 //!
+//! use sg200x_bsp::soc::{SD_DRIVER_BASE, TOP_BASE};
+//!
 //! // 创建 SDMMC 驱动实例
-//! let mut sdmmc = unsafe { Sdmmc::new() };
+//! let mut sdmmc = unsafe { Sdmmc::new(SD_DRIVER_BASE, TOP_BASE) };
 //!
 //! // 初始化 SD 卡
 //! sdmmc.init()?;
@@ -45,7 +47,6 @@ use crate::pinmux::{
     DriveStrength, FMUX_SD0_CLK, FMUX_SD0_CMD, FMUX_SD0_D0, FMUX_SD0_D1, FMUX_SD0_D2, FMUX_SD0_D3,
     IoConfig, Pinmux,
 };
-
 extern crate alloc;
 
 /// SD 卡基本信息（在 [`Sdmmc::init`] 之后填充，可由
@@ -84,28 +85,19 @@ pub struct Sdmmc {
 impl Sdmmc {
     /// 创建新的 SDMMC 驱动实例
     ///
+    /// # 参数
+    ///
+    /// - `sd_base`: SD/MMC 控制器 MMIO 基地址（见 [`SD_DRIVER_BASE`]）
+    /// - `top_base`: TOP 模块 MMIO 基地址（见 [`TOP_BASE`]）
+    ///
+    /// Pinmux 默认未附加；初始化前可调用 [`Sdmmc::set_pinmux`] 配置引脚复用。
+    ///
     /// # Safety
     ///
     /// 调用者必须确保:
     /// - 寄存器地址有效且可访问
     /// - 不会创建多个实例导致数据竞争
-    pub unsafe fn new() -> Self {
-        unsafe {
-            Self {
-                regs: &*(SD_DRIVER_BASE as *const SdmmcRegisters),
-                top_regs: &*(TOP_BASE as *const TopRegisters),
-                pinmux: Some(Pinmux::new()),
-                card_info: Cell::new(SdCardInfo::default()),
-            }
-        }
-    }
-
-    /// 从指定基地址创建 SDMMC 驱动实例
-    ///
-    /// # Safety
-    ///
-    /// 调用者必须确保所有基地址有效且可访问
-    pub unsafe fn from_base_addresses(sd_base: usize, top_base: usize) -> Self {
+    pub unsafe fn new(sd_base: usize, top_base: usize) -> Self {
         unsafe {
             Self {
                 regs: &*(sd_base as *const SdmmcRegisters),
@@ -818,9 +810,25 @@ impl Sdmmc {
     }
 }
 
-/// 初始化 SD 卡
-pub fn init() -> Result<Sdmmc, CmdError> {
-    let sdmmc = unsafe { Sdmmc::new() };
+/// 创建 SDMMC 驱动、附加 Pinmux 并完成 SD 卡初始化
+///
+/// # 参数
+///
+/// - `sd_base` / `top_base`: SD 控制器与 TOP 模块 MMIO 基地址
+/// - `fmux_base` / `ioblk_base` / `ioblk_grtc_base`: Pinmux 所需 FMUX 与 IOBLK 基地址
+///
+/// # Safety
+///
+/// 调用者必须确保所有 MMIO 基地址有效且可访问。
+pub unsafe fn init(
+    sd_base: usize,
+    top_base: usize,
+    fmux_base: usize,
+    ioblk_base: usize,
+    ioblk_grtc_base: usize,
+) -> Result<Sdmmc, CmdError> {
+    let mut sdmmc = unsafe { Sdmmc::new(sd_base, top_base) };
+    sdmmc.set_pinmux(unsafe { Pinmux::new(fmux_base, ioblk_base, ioblk_grtc_base) });
     sdmmc.init()?;
     Ok(sdmmc)
 }

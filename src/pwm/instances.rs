@@ -1,80 +1,21 @@
 //! # PWM 实例定义
 //!
-//! 本模块定义了 SG2002 芯片上所有 PWM 控制器实例的基地址。
-//!
-//! SG2002 芯片共有 4 个 PWM 控制器：
-//! - PWM0: 包含 PWM[0], PWM[1], PWM[2], PWM[3]
-//! - PWM1: 包含 PWM[4], PWM[5], PWM[6], PWM[7]
-//! - PWM2: 包含 PWM[8], PWM[9], PWM[10], PWM[11]
-//! - PWM3: 包含 PWM[12], PWM[13], PWM[14], PWM[15]
+//! SG2002 芯片共有 4 个 PWM 控制器（基址见 [`PWM0_BASE`] … [`PWM3_BASE`]）：
+//! - PWM0: PWM[0]–PWM[3]
+//! - PWM1: PWM[4]–PWM[7]
+//! - PWM2: PWM[8]–PWM[11]
+//! - PWM3: PWM[12]–PWM[15]
 
 pub use crate::soc::{PWM0_BASE, PWM1_BASE, PWM2_BASE, PWM3_BASE};
 
-/// PWM 控制器实例标识符
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum PwmInstance {
-    /// PWM0 控制器 (PWM[0]-PWM[3])
-    Pwm0 = 0,
-    /// PWM1 控制器 (PWM[4]-PWM[7])
-    Pwm1 = 1,
-    /// PWM2 控制器 (PWM[8]-PWM[11])
-    Pwm2 = 2,
-    /// PWM3 控制器 (PWM[12]-PWM[15])
-    Pwm3 = 3,
-}
-
-impl PwmInstance {
-    /// 获取 PWM 控制器的基地址
-    pub const fn base_address(&self) -> usize {
-        match self {
-            PwmInstance::Pwm0 => PWM0_BASE,
-            PwmInstance::Pwm1 => PWM1_BASE,
-            PwmInstance::Pwm2 => PWM2_BASE,
-            PwmInstance::Pwm3 => PWM3_BASE,
-        }
-    }
-
-    /// 从索引创建 PWM 实例
-    pub const fn from_index(index: u8) -> Option<Self> {
-        match index {
-            0 => Some(PwmInstance::Pwm0),
-            1 => Some(PwmInstance::Pwm1),
-            2 => Some(PwmInstance::Pwm2),
-            3 => Some(PwmInstance::Pwm3),
-            _ => None,
-        }
-    }
-
-    /// 获取实例索引
-    pub const fn index(&self) -> u8 {
-        *self as u8
-    }
-
-    /// 获取此控制器的全局 PWM 通道起始编号
-    /// PWM0: 0-3, PWM1: 4-7, PWM2: 8-11, PWM3: 12-15
-    pub const fn channel_offset(&self) -> u8 {
-        (*self as u8) * 4
-    }
-
-    /// 从全局 PWM 通道号获取对应的控制器实例
-    pub const fn from_global_channel(channel: u8) -> Option<Self> {
-        match channel {
-            0..=3 => Some(PwmInstance::Pwm0),
-            4..=7 => Some(PwmInstance::Pwm1),
-            8..=11 => Some(PwmInstance::Pwm2),
-            12..=15 => Some(PwmInstance::Pwm3),
-            _ => None,
-        }
-    }
-
-    /// 从全局 PWM 通道号获取控制器内的本地通道号
-    pub const fn local_channel(global_channel: u8) -> Option<u8> {
-        if global_channel < 16 {
-            Some(global_channel % 4)
-        } else {
-            None
-        }
+/// 控制器 MMIO 基址（`controller_index` 为 0–3）
+pub const fn pwm_controller_base(controller_index: u8) -> Option<usize> {
+    match controller_index {
+        0 => Some(PWM0_BASE),
+        1 => Some(PWM1_BASE),
+        2 => Some(PWM2_BASE),
+        3 => Some(PWM3_BASE),
+        _ => None,
     }
 }
 
@@ -145,17 +86,22 @@ impl GlobalPwmChannel {
         *self as u8
     }
 
-    /// 获取所属的 PWM 控制器实例
-    pub const fn instance(&self) -> PwmInstance {
-        match *self as u8 {
-            0..=3 => PwmInstance::Pwm0,
-            4..=7 => PwmInstance::Pwm1,
-            8..=11 => PwmInstance::Pwm2,
-            _ => PwmInstance::Pwm3,
+    /// 所属控制器索引 (0–3)
+    pub const fn controller_index(&self) -> u8 {
+        (*self as u8) / 4
+    }
+
+    /// 所属控制器的 MMIO 基址
+    pub const fn controller_base(&self) -> usize {
+        match self.controller_index() {
+            0 => PWM0_BASE,
+            1 => PWM1_BASE,
+            2 => PWM2_BASE,
+            _ => PWM3_BASE,
         }
     }
 
-    /// 获取控制器内的本地通道号 (0-3)
+    /// 控制器内的本地通道号 (0-3)
     pub const fn local_channel(&self) -> u8 {
         (*self as u8) % 4
     }
