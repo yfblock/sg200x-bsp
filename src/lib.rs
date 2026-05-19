@@ -12,7 +12,8 @@
 //! - `pwm`: PWM 控制驱动
 //! - `usb`: USB 主机栈（DWC2 控制器）+ 类协议（UVC / Mass Storage）
 //! - `ethernet` (feature `ethernet`): 板载 cvitek-eth (DWMAC + 内部 EPHY) 驱动
-//! - `utils`: 与具体外设无关的内部 helper（D-cache / DMA 一致性等）
+//! - `soc`: SoC 外设 MMIO 物理基址常量
+//! - `utils`: 与具体外设无关的内部 helper（D-cache / DMA 一致性、忙等延时等）
 //!
 //! # I2C 使用示例
 //!
@@ -72,5 +73,6 @@ pub mod pinmux;
 pub mod pwm;
 pub mod rstc;
 pub mod sdmmc;
+pub mod soc;
 pub mod usb;
 pub mod utils;

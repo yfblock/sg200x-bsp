@@ -26,23 +26,19 @@ pub fn enumerate_topology_only() -> UsbResult<TopologyScanExtras> {
     dwc2::dwc2_host_init()?;
     check_root_device_connected()?;
     let hprt0 = unsafe { dwc2::dwc2_hprt0_read() };
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG pre-reset HPRT0={:#010x} CONNSTS={} ENABLE={} SPD={} (0=HS 1=FS 2=LS)",
+    log::debug!("USB-DBG pre-reset HPRT0={:#010x} CONNSTS={} ENABLE={} SPD={} (0=HS 1=FS 2=LS)",
         hprt0,
         hprt0 & 1,
         (hprt0 >> 2) & 1,
-        dwc2::hprt_speed_bits(hprt0),
-    ));
+        dwc2::hprt_speed_bits(hprt0),);
     dwc2::debug_dump_root_port_hw("pre-reset");
     dwc2::dwc2_host_root_bus_reset_pulse()?;
     let hprt = unsafe { dwc2::dwc2_hprt0_read() };
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG post-reset HPRT0={:#010x} CONNSTS={} ENABLE={} SPD={} (0=HS 1=FS 2=LS)",
+    log::debug!("USB-DBG post-reset HPRT0={:#010x} CONNSTS={} ENABLE={} SPD={} (0=HS 1=FS 2=LS)",
         hprt,
         hprt & 1,
         (hprt >> 2) & 1,
-        dwc2::hprt_speed_bits(hprt),
-    ));
+        dwc2::hprt_speed_bits(hprt),);
     dwc2::debug_dump_root_port_hw("post-reset");
     topology::enumerate_bus_print_tree_only()
 }
@@ -59,10 +55,8 @@ fn check_root_device_connected() -> UsbResult<()> {
         let hprt = unsafe { dwc2::dwc2_hprt0_read() };
         if dwc2::hprt_connsts(hprt) {
             if t > 0 {
-                crate::usb::log::usb_log_fmt(format_args!(
-                    "USB-DBG root connect after {} polls HPRT0={:#010x}",
-                    t, hprt
-                ));
+                log::debug!("USB-DBG root connect after {} polls HPRT0={:#010x}",
+                    t, hprt);
             }
             return Ok(());
         }
@@ -72,13 +66,11 @@ fn check_root_device_connected() -> UsbResult<()> {
     }
 
     let hprt = unsafe { dwc2::dwc2_hprt0_read() };
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DBG no root connect: HPRT0={:#010x} PWR={} CONNSTS={} LNSTS={}",
+    log::debug!("USB-DBG no root connect: HPRT0={:#010x} PWR={} CONNSTS={} LNSTS={}",
         hprt,
         dwc2::hprt_pwr(hprt),
         dwc2::hprt_connsts(hprt),
-        dwc2::hprt_lnsts(hprt),
-    ));
+        dwc2::hprt_lnsts(hprt),);
     dwc2::debug_dump_root_port_hw("no root connect");
     Err(UsbError::Hardware(
         "HPRT0 CONNSTS=0: no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",

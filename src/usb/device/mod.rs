@@ -5,7 +5,7 @@
 //!
 //! 本模块**轮询驱动**，没有挂中断。应用流程：
 //!
-//! 1. 板级 bring-up：`platform::set_dwc2_base_virt()` + 板上 PHY/clock 切到
+//! 1. 板级 bring-up：`usb::set_dwc2_base_virt()` + 板上 PHY/clock 切到
 //!    device 模式（VBUS 由 PC 提供，需关板上 VBUS_GPIO）。
 //! 2. 调 [`controller::dwc2_device_init`]：复位、Force Device、DCFG=HS、FIFO
 //!    划分、EP0 初始化（**保持 `SFTDISCON=1` 不上线**）。

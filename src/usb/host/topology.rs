@@ -3,12 +3,40 @@
 //! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_root_port()` 调用；
 //! 返回 Mass Storage 设备四元组供后续 [`crate::usb::class::mass_storage`] 使用。
 
-use core::fmt::Write;
-
 use crate::usb::error::{UsbError, UsbResult};
 use crate::usb::host::dwc2::ep0 as dwc2_ep0;
-use crate::usb::log::{usb_log_flush_residual, LineBufferedUsbLog};
 use crate::usb::setup;
+
+/// 拓扑日志缩进（每级 2 空格）。
+#[inline]
+fn topo_indent(depth: u8) -> &'static str {
+    const T: [&str; 12] = [
+        "",
+        "  ",
+        "    ",
+        "      ",
+        "        ",
+        "          ",
+        "            ",
+        "              ",
+        "                ",
+        "                  ",
+        "                    ",
+        "                      ",
+    ];
+    T.get(depth as usize).copied().unwrap_or("                      ")
+}
+
+macro_rules! topo_log {
+    ($depth:expr, $($tt:tt)*) => {
+        ::log::info!(
+            target: "sg200x_bsp::usb::topology",
+            "{}{}",
+            topo_indent($depth),
+            format_args!($($tt)*)
+        )
+    };
+}
 
 /// USB `bDeviceClass`：Hub。
 const USB_CLASS_HUB: u8 = 0x09;
@@ -122,12 +150,6 @@ fn is_hub_device(class: u8, vid: u16, pid: u16) -> bool {
 #[inline]
 fn is_msc_candidate(iface_class: u8, vid: u16, pid: u16) -> bool {
     iface_class == USB_CLASS_MSC || (vid == QEMU_USB_STORAGE_VID && pid == QEMU_USB_STORAGE_PID)
-}
-
-fn write_indent<W: Write>(w: &mut W, depth: u8) {
-    for _ in 0..depth {
-        let _ = w.write_str("  ");
-    }
 }
 
 /// 读配置描述符前 64 字节，返回首个 **INTERFACE** 描述符的 `bInterfaceClass`（无则 0）。
@@ -295,21 +317,25 @@ fn visit_default_depth(
     port_on_hub: u8,
     st: &mut ScanState,
 ) -> UsbResult<()> {
-    let mut w = LineBufferedUsbLog;
     let (vid, pid, ep0_mps, dev_class) = dwc2_ep0::get_device_vid_pid_default_addr()?;
 
-    write_indent(&mut w, depth);
     if parent_hub == 0 && port_on_hub == 0 {
-        let _ = writeln!(
-            w,
+        topo_log!(
+            depth,
             "[USB] root dev@0 VID={:04x} PID={:04x} dev_class={:02x}",
-            vid, pid, dev_class
+            vid,
+            pid,
+            dev_class
         );
     } else {
-        let _ = writeln!(
-            w,
+        topo_log!(
+            depth,
             "[USB] dev@0 (hub {} port {}) VID={:04x} PID={:04x} dev_class={:02x}",
-            parent_hub, port_on_hub, vid, pid, dev_class
+            parent_hub,
+            port_on_hub,
+            vid,
+            pid,
+            dev_class
         );
     }
 
@@ -319,22 +345,14 @@ fn visit_default_depth(
         dwc2_ep0::usb_post_set_address_delay();
         dwc2_ep0::set_configuration(u32::from(hub_addr), 1, ep0_mps)?;
 
-        write_indent(&mut w, depth);
-        let _ = writeln!(
-            w,
-            "[USB]   -> Hub enumerated addr={} ep0_mps={}",
-            hub_addr, ep0_mps
-        );
+        topo_log!(depth, "[USB]   -> Hub enumerated addr={} ep0_mps={}",
+            hub_addr, ep0_mps);
 
         let info = hub_info(u32::from(hub_addr), ep0_mps)?;
         let nports = info.nports;
         let pwr_good_ms = info.pwr_on_2_pwr_good_ms.max(20); // 给 ≥20ms 富余
-        write_indent(&mut w, depth);
-        let _ = writeln!(
-            w,
-            "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
-            nports, pwr_good_ms
-        );
+        topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
+            nports, pwr_good_ms);
 
         // ① 给所有下游端口供电：USB 2.0 spec §11.11.1：hub 上电后端口默认 PowerOff，
         //    必须由 host 显式 SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
@@ -345,8 +363,7 @@ fn visit_default_depth(
                 setup::HUB_PORT_FEATURE_POWER,
                 ep0_mps,
             ) {
-                write_indent(&mut w, depth);
-                let _ = writeln!(w, "[USB]   -> port {} POWER fail: {:?}", port, e);
+                topo_log!(depth, "[USB]   -> port {} POWER fail: {:?}", port, e);
             }
         }
         // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
@@ -356,19 +373,18 @@ fn visit_default_depth(
             let status = match hub_port_status_w0(u32::from(hub_addr), u16::from(port), ep0_mps) {
                 Ok(s) => s,
                 Err(e) => {
-                    write_indent(&mut w, depth);
-                    let _ = writeln!(
-                        w,
+                    topo_log!(
+                        depth,
                         "[USB]   -> port {} GET_PORT_STATUS: {:?}",
-                        port, e
+                        port,
+                        e
                     );
                     continue;
                 }
             };
             let conn = status & 1 != 0;
-            write_indent(&mut w, depth);
-            let _ = writeln!(
-                w,
+            topo_log!(
+                depth,
                 "[USB]   -> port {} wPortStatus={:#06x} {}",
                 port,
                 status,
@@ -392,8 +408,7 @@ fn visit_default_depth(
                 setup::HUB_PORT_FEATURE_RESET,
                 ep0_mps,
             ) {
-                write_indent(&mut w, depth);
-                let _ = writeln!(w, "[USB]   -> port {} RESET fail: {:?}", port, e);
+                topo_log!(depth, "[USB]   -> port {} RESET fail: {:?}", port, e);
                 continue;
             }
             // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms；hub 完成 reset 后会自动置 C_PORT_RESET。
@@ -403,11 +418,11 @@ fn visit_default_depth(
             let after = match hub_port_status_w0(u32::from(hub_addr), u16::from(port), ep0_mps) {
                 Ok(s) => s,
                 Err(e) => {
-                    write_indent(&mut w, depth);
-                    let _ = writeln!(
-                        w,
+                    topo_log!(
+                        depth,
                         "[USB]   -> port {} after-reset GET_PORT_STATUS: {:?}",
-                        port, e
+                        port,
+                        e
                     );
                     continue;
                 }
@@ -420,11 +435,13 @@ fn visit_default_depth(
             );
             let enabled = (after >> 1) & 1 != 0;
             let speed = port_speed_str(after);
-            write_indent(&mut w, depth);
-            let _ = writeln!(
-                w,
+            topo_log!(
+                depth,
                 "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
-                port, after, enabled, speed
+                port,
+                after,
+                enabled,
+                speed
             );
             if !enabled {
                 continue;
@@ -433,11 +450,11 @@ fn visit_default_depth(
             // ⑤ 速度提示：HS hub 下若挂 FS/LS 设备需要 split transaction
             //    （HCSPLT 编程），当前 host 通道未实现，无法访问 EP0 → 跳过。
             if speed != "HS" {
-                write_indent(&mut w, depth);
-                let _ = writeln!(
-                    w,
+                topo_log!(
+                    depth,
                     "[USB]   -> port {} 设备非 HS（{}），HS hub 下 FS/LS 设备需要 split transaction，当前驱动暂不支持，跳过此端口枚举",
-                    port, speed
+                    port,
+                    speed
                 );
                 continue;
             }
@@ -454,11 +471,12 @@ fn visit_default_depth(
     dwc2_ep0::set_configuration(u32::from(fn_addr), 1, ep0_mps)?;
 
     let iface_class = first_interface_class(u32::from(fn_addr), ep0_mps).unwrap_or(0);
-    write_indent(&mut w, depth);
-    let _ = writeln!(
-        w,
+    topo_log!(
+        depth,
         "[USB]   -> function addr={} ep0_mps={} first_ifc_class={:02x}",
-        fn_addr, ep0_mps, iface_class
+        fn_addr,
+        ep0_mps,
+        iface_class
     );
 
     if is_msc_candidate(iface_class, vid, pid) {
@@ -480,12 +498,8 @@ fn visit_default_depth(
                 bulk_out_mps: bout_mps,
             });
         }
-        write_indent(&mut w, depth);
-        let _ = writeln!(
-            w,
-            "[USB]   -> Mass Storage candidate iface={} BulkIN=ep{}({}) BulkOUT=ep{}({})",
-            iface_num, bin_ep, bin_mps, bout_ep, bout_mps
-        );
+        topo_log!(depth, "[USB]   -> Mass Storage candidate iface={} BulkIN=ep{}({}) BulkOUT=ep{}({})",
+            iface_num, bin_ep, bin_mps, bout_ep, bout_mps);
     }
 
     if iface_class == USB_CLASS_VIDEO && st.extras.uvc.is_none() {
@@ -495,12 +509,8 @@ fn visit_default_depth(
             vid,
             pid,
         });
-        write_indent(&mut w, depth);
-        let _ = writeln!(
-            w,
-            "[USB]   -> Video class device (UVC candidate) addr={}",
-            fn_addr
-        );
+        topo_log!(depth, "[USB]   -> Video class device (UVC candidate) addr={}",
+            fn_addr);
     }
 
     Ok(())
@@ -512,16 +522,11 @@ fn visit_default_depth(
 /// - `Ok((vid, pid, ep0_mps, dev_addr))`：`dev_addr` 为设备 USB 地址（7 位，数值形式）。
 /// - `Err(Protocol(...))`：拓扑中未发现 MSC。
 pub fn enumerate_bus_print_tree() -> UsbResult<(u16, u16, u32, u32)> {
-    let mut w = LineBufferedUsbLog;
-    let _ = writeln!(
-        w,
-        "[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
-    );
+    log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
     let mut st = ScanState::new();
     let visit = visit_default_depth(0, 0, 0, &mut st);
-    let _ = writeln!(w, "[USB] topology: scan finished.");
-    usb_log_flush_residual();
+    log::info!("[USB] topology: scan finished.");
     visit?;
     if !st.have_msc {
         return Err(UsbError::Protocol("no mass storage device found"));
@@ -534,16 +539,11 @@ pub fn enumerate_bus_print_tree() -> UsbResult<(u16, u16, u32, u32)> {
 /// # 返回值
 /// [`TopologyScanExtras`]：发现的 UVC / MSC 等候选（字段可能仍为 `None`）。
 pub fn enumerate_bus_print_tree_only() -> UsbResult<TopologyScanExtras> {
-    let mut w = LineBufferedUsbLog;
-    let _ = writeln!(
-        w,
-        "[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
-    );
+    log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
     let mut st = ScanState::new();
     let visit = visit_default_depth(0, 0, 0, &mut st);
-    let _ = writeln!(w, "[USB] topology: scan finished.");
-    usb_log_flush_residual();
+    log::info!("[USB] topology: scan finished.");
     visit?;
     Ok(st.extras)
 }

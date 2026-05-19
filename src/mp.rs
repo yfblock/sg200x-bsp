@@ -15,12 +15,12 @@
 //!
 //! ## 相关寄存器
 //!
-//! | 地址       | 名称                    | 描述                           |
-//! |------------|-------------------------|--------------------------------|
-//! | 0x03003024 | SOFT_CPU_RSTN           | CPU 软复位控制寄存器           |
-//! | 0x020B0004 | SEC_SYS_CTRL            | 安全子系统控制寄存器           |
-//! | 0x020B0020 | SEC_SYS_BOOT_ADDR_L     | 协处理器启动地址低 32 位       |
-//! | 0x020B0024 | SEC_SYS_BOOT_ADDR_H     | 协处理器启动地址高 32 位       |
+//! | 地址 | 名称 | 描述 |
+//! |------|------|------|
+//! | [`crate::soc::SOFT_CPU_RSTN_ADDR`] | SOFT_CPU_RSTN | CPU 软复位控制寄存器 |
+//! | [`crate::soc::SEC_SYS_CTRL_ADDR`] | SEC_SYS_CTRL | 安全子系统控制寄存器 |
+//! | [`crate::soc::SEC_SYS_BOOT_ADDR_L_ADDR`] | SEC_SYS_BOOT_ADDR_L | 协处理器启动地址低 32 位 |
+//! | [`crate::soc::SEC_SYS_BOOT_ADDR_H_ADDR`] | SEC_SYS_BOOT_ADDR_H | 协处理器启动地址高 32 位 |
 //!
 //! ## 使用示例
 //!
@@ -45,15 +45,10 @@ use tock_registers::{register_bitfields, register_structs, registers::ReadWrite}
 
 use crate::rstc::{Rstc, RSTC_BASE};
 
-// ============================================================================
-// 寄存器基地址
-// ============================================================================
-
-/// 安全子系统寄存器基地址
-pub const SEC_SYS_BASE: usize = 0x020B0000;
-
-/// SOFT_CPU_RSTN 寄存器地址 (复位控制器)
-pub const SOFT_CPU_RSTN_ADDR: usize = RSTC_BASE + 0x024;
+pub use crate::soc::{
+    SEC_SYS_BASE, SEC_SYS_BOOT_ADDR_H_ADDR, SEC_SYS_BOOT_ADDR_L_ADDR, SEC_SYS_CTRL_ADDR,
+    SOFT_CPU_RSTN_ADDR,
+};
 
 // ============================================================================
 // 寄存器位域定义 (使用 tock-registers)
@@ -318,11 +313,11 @@ pub unsafe fn start_secondary_core_raw(entry: u64) {
         // 复位控制寄存器地址
         let rst_ptr = SOFT_CPU_RSTN_ADDR as *mut u32;
         // 安全子系统控制寄存器地址
-        let sec_ctrl_ptr = (SEC_SYS_BASE + 0x004) as *mut u32;
+        let sec_ctrl_ptr = SEC_SYS_CTRL_ADDR as *mut u32;
         // 启动地址低 32 位寄存器
-        let boot_addr_l_ptr = (SEC_SYS_BASE + 0x020) as *mut u32;
+        let boot_addr_l_ptr = SEC_SYS_BOOT_ADDR_L_ADDR as *mut u32;
         // 启动地址高 32 位寄存器
-        let boot_addr_h_ptr = (SEC_SYS_BASE + 0x024) as *mut u32;
+        let boot_addr_h_ptr = SEC_SYS_BOOT_ADDR_H_ADDR as *mut u32;
 
         // CPUSYS2 (小核) 的位掩码 (bit 6)
         const CPUSYS2_MASK: u32 = 1 << 6;

@@ -234,12 +234,10 @@ impl UsbDeviceClass for CdcAcm {
             }
             CDC_REQ_SET_CONTROL_LINE_STATE => {
                 self.control_lines = setup.w_value;
-                crate::usb::log::usb_log_fmt(format_args!(
-                    "USB-DEV CDC SET_CONTROL_LINE_STATE = {:#06x} (DTR={} RTS={})",
+                log::info!("USB-DEV CDC SET_CONTROL_LINE_STATE = {:#06x} (DTR={} RTS={})",
                     setup.w_value,
                     (setup.w_value >> 0) & 1,
-                    (setup.w_value >> 1) & 1,
-                ));
+                    (setup.w_value >> 1) & 1,);
                 Ep0Reply::StatusOnly
             }
             CDC_REQ_SEND_BREAK => Ep0Reply::StatusOnly,
@@ -254,10 +252,8 @@ impl UsbDeviceClass for CdcAcm {
             self.line_coding.b_char_format = data[4];
             self.line_coding.b_parity_type = data[5];
             self.line_coding.b_data_bits = data[6];
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-DEV CDC SET_LINE_CODING rate={} fmt={} parity={} bits={}",
-                dwdte_rate, data[4], data[5], data[6]
-            ));
+            log::info!("USB-DEV CDC SET_LINE_CODING rate={} fmt={} parity={} bits={}",
+                dwdte_rate, data[4], data[5], data[6]);
         }
     }
 
@@ -279,10 +275,8 @@ impl UsbDeviceClass for CdcAcm {
         self.out_armed = false;
         self.in_need_zlp = false;
         self.tx_pending = 0;
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DEV CDC configured: bulk={} mps={} speed={:?}",
-            BULK_DATA_EP, BULK_MPS, ctx.speed
-        ));
+        log::info!("USB-DEV CDC configured: bulk={} mps={} speed={:?}",
+            BULK_DATA_EP, BULK_MPS, ctx.speed);
     }
 
     fn poll(&mut self, _ctx: &Ep0Context) {
@@ -297,7 +291,7 @@ impl UsbDeviceClass for CdcAcm {
                 self.in_busy = false;
                 if self.in_need_zlp {
                     self.in_need_zlp = false;
-                    let pa = crate::usb::platform::usb_dma_phys_for(self.tx_buf.0.as_ptr());
+                    let pa = crate::usb::usb_dma_phys_for(self.tx_buf.0.as_ptr());
                     if start_bulk_in(BULK_DATA_EP, pa, 0, 1).is_ok() {
                         self.in_busy = true;
                     }
@@ -348,7 +342,7 @@ impl UsbDeviceClass for CdcAcm {
             unsafe {
                 cache::dcache_invalidate_after_dma(self.rx_buf.0.as_mut_ptr(), BULK_BUF_SIZE);
             }
-            let pa = crate::usb::platform::usb_dma_phys_for(self.rx_buf.0.as_ptr());
+            let pa = crate::usb::usb_dma_phys_for(self.rx_buf.0.as_ptr());
             let _ = prime_bulk_out(BULK_DATA_EP, pa, BULK_BUF_SIZE as u32, 1);
             self.out_armed = true;
         }
@@ -364,7 +358,7 @@ impl CdcAcm {
         unsafe {
             cache::dcache_clean_for_dma(self.tx_buf.0.as_ptr(), self.tx_pending);
         }
-        let pa = crate::usb::platform::usb_dma_phys_for(self.tx_buf.0.as_ptr());
+        let pa = crate::usb::usb_dma_phys_for(self.tx_buf.0.as_ptr());
         // 只发数据 packet 不内嵌 ZLP —— 这颗 dwc2 在 PKTCNT=2/XFERSIZE=64 写法
         // 下不触发 XFERCOMPL 中断，导致 in_busy 永远不释放。完成后由 poll() 里
         // 的 in_need_zlp 路径独立 start_bulk_in(0, 1) 发 ZLP。

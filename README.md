@@ -6,6 +6,7 @@ SG2002/SG200x 系列芯片的板级支持包 (BSP)，提供硬件抽象层驱动
 
 | 模块 | 状态 | 描述 |
 |------|------|------|
+| soc | ✅ 完成 | SoC 外设 MMIO 物理基址（`soc::sg2002::*`），各驱动再导出保持兼容 |
 | pinmux | ✅ 完成 | 引脚复用：FMUX 功能选择 + IOBLK 电气配置（含 MIPI 等焊盘的 FMUX 位域） |
 | gpio | ✅ 完成 | GPIO 控制驱动 |
 | sdmmc | ✅ 完成 | SD/MMC 控制驱动 |
@@ -41,7 +42,7 @@ sg200x-bsp = "0.5"
 
 ### Pinmux 与 FMUX
 
-引脚数字功能由 **FMUX**（基地址 `0x0300_1000`，见 `pinmux::FMUX_BASE`）的 **FSEL** 位选择；上拉/下拉等由 **IOBLK** 各组寄存器配置。**I2C3** 的 SCL/SDA 分别复用在 **SD1_CMD** / **SD1_CLK**（FSEL = 2），可用 `Pinmux::setup_iic3_pins()` 一次配置。
+引脚数字功能由 **FMUX**（基地址见 `soc::FMUX_BASE` / `pinmux::FMUX_BASE`）的 **FSEL** 位选择；上拉/下拉等由 **IOBLK** 各组寄存器配置（基址见 `soc::IOBLK_*_BASE`）。**I2C3** 的 SCL/SDA 分别复用在 **SD1_CMD** / **SD1_CLK**（FSEL = 2），可用 `Pinmux::setup_iic3_pins()` 一次配置。
 
 ```rust
 #![no_std]
@@ -127,14 +128,14 @@ unsafe {
 
 SG2002 芯片共有 6 个 I2C 控制器：
 
-| 实例 | 基地址 | 域 |
-|------|--------|-----|
-| I2C0 | 0x0400_0000 | Active Domain |
-| I2C1 | 0x0401_0000 | Active Domain |
-| I2C2 | 0x0402_0000 | Active Domain |
-| I2C3 | 0x0403_0000 | Active Domain |
-| I2C4 | 0x0404_0000 | Active Domain |
-| RTCSYS_I2C | 0x0502_B000 | No-die Domain (RTC) |
+| 实例 | 基地址常量 (`soc::`) | 域 |
+|------|----------------------|-----|
+| I2C0 | `I2C0_BASE` | Active Domain |
+| I2C1 | `I2C1_BASE` | Active Domain |
+| I2C2 | `I2C2_BASE` | Active Domain |
+| I2C3 | `I2C3_BASE` | Active Domain |
+| I2C4 | `I2C4_BASE` | Active Domain |
+| RTCSYS_I2C | `RTCSYS_I2C_BASE` | No-die Domain (RTC) |
 
 ### 功能特性
 
@@ -149,12 +150,12 @@ SG2002 芯片共有 6 个 I2C 控制器：
 
 SG2002 芯片共有 4 个 PWM 控制器，共 16 路 PWM 输出：
 
-| 实例 | 基地址 | 通道 |
-|------|--------|------|
-| PWM0 | 0x03060000 | PWM[0-3] |
-| PWM1 | 0x03061000 | PWM[4-7] |
-| PWM2 | 0x03062000 | PWM[8-11] |
-| PWM3 | 0x03063000 | PWM[12-15] |
+| 实例 | 基地址常量 (`soc::`) | 通道 |
+|------|----------------------|------|
+| PWM0 | `PWM0_BASE` | PWM[0-3] |
+| PWM1 | `PWM1_BASE` | PWM[4-7] |
+| PWM2 | `PWM2_BASE` | PWM[8-11] |
+| PWM3 | `PWM3_BASE` | PWM[12-15] |
 
 ### 功能特性
 
@@ -168,7 +169,7 @@ SG2002 芯片共有 4 个 PWM 控制器，共 16 路 PWM 输出：
 
 ## 复位控制器模块详情
 
-复位控制器基地址: 0x03003000
+复位控制器基地址: `soc::RSTC_BASE`（与各驱动 `RSTC_BASE` 再导出同值）
 
 ### 功能特性
 

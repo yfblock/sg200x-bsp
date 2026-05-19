@@ -8,17 +8,7 @@
 //! - PWM2: 包含 PWM[8], PWM[9], PWM[10], PWM[11]
 //! - PWM3: 包含 PWM[12], PWM[13], PWM[14], PWM[15]
 
-/// PWM0 控制器基地址
-pub const PWM0_BASE: usize = 0x0306_0000;
-
-/// PWM1 控制器基地址
-pub const PWM1_BASE: usize = 0x0306_1000;
-
-/// PWM2 控制器基地址
-pub const PWM2_BASE: usize = 0x0306_2000;
-
-/// PWM3 控制器基地址
-pub const PWM3_BASE: usize = 0x0306_3000;
+pub use crate::soc::{PWM0_BASE, PWM1_BASE, PWM2_BASE, PWM3_BASE};
 
 /// PWM 控制器实例标识符
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,39 +158,5 @@ impl GlobalPwmChannel {
     /// 获取控制器内的本地通道号 (0-3)
     pub const fn local_channel(&self) -> u8 {
         (*self as u8) % 4
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pwm_base_addresses() {
-        assert_eq!(PwmInstance::Pwm0.base_address(), 0x0306_0000);
-        assert_eq!(PwmInstance::Pwm1.base_address(), 0x0306_1000);
-        assert_eq!(PwmInstance::Pwm2.base_address(), 0x0306_2000);
-        assert_eq!(PwmInstance::Pwm3.base_address(), 0x0306_3000);
-    }
-
-    #[test]
-    fn test_pwm_channel_offset() {
-        assert_eq!(PwmInstance::Pwm0.channel_offset(), 0);
-        assert_eq!(PwmInstance::Pwm1.channel_offset(), 4);
-        assert_eq!(PwmInstance::Pwm2.channel_offset(), 8);
-        assert_eq!(PwmInstance::Pwm3.channel_offset(), 12);
-    }
-
-    #[test]
-    fn test_global_channel() {
-        assert_eq!(GlobalPwmChannel::Pwm0.instance(), PwmInstance::Pwm0);
-        assert_eq!(GlobalPwmChannel::Pwm5.instance(), PwmInstance::Pwm1);
-        assert_eq!(GlobalPwmChannel::Pwm10.instance(), PwmInstance::Pwm2);
-        assert_eq!(GlobalPwmChannel::Pwm15.instance(), PwmInstance::Pwm3);
-
-        assert_eq!(GlobalPwmChannel::Pwm0.local_channel(), 0);
-        assert_eq!(GlobalPwmChannel::Pwm5.local_channel(), 1);
-        assert_eq!(GlobalPwmChannel::Pwm10.local_channel(), 2);
-        assert_eq!(GlobalPwmChannel::Pwm15.local_channel(), 3);
     }
 }

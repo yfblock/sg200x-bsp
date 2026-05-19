@@ -2,7 +2,7 @@
 //! FIFO 划分（GRXFSIZ + GNPTXFSIZ + DIEPTXF1）→ DCTL.SFTDISCON 控制上线。
 //!
 //! 与 [`crate::usb::host::dwc2::controller`] 共用同一个 [`crate::usb::host::dwc2::regs::Dwc2Regs`] 视图与
-//! [`crate::usb::platform`] 基址；本文件仅触碰 device 段（0x800+）+ 通用段
+//! [`crate::usb::set_dwc2_base_virt`] 配置的基址；本文件仅触碰 device 段（0x800+）+ 通用段
 //! （GUSBCFG / GAHBCFG / GRSTCTL / GINTSTS / GHWCFG3）。
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -13,16 +13,16 @@ use crate::usb::host::dwc2::regs::{
     Dwc2Regs, DCFG, DCTL, DEPMSK, DIEPCTL, DOEPCTL, GAHBCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTSTS,
     GRSTCTL, GUSBCFG,
 };
-use crate::usb::platform;
+use crate::usb;
 
 #[inline]
 fn base() -> usize {
-    platform::dwc2_base_virt()
+    usb::dwc2_base_virt()
 }
 
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call platform::set_dwc2_base_virt)")
+    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 #[inline]
@@ -123,10 +123,8 @@ fn init_gusbcfg_cv182x() {
     let r = regs();
     let utmi_w = r.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
     let want_16bit = utmi_w == 1;
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} => PHYIF16={}",
-        if want_16bit { 1 } else { 0 }
-    ));
+    log::info!("USB-DEV GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} => PHYIF16={}",
+        if want_16bit { 1 } else { 0 });
     let mut field = GUSBCFG::FORCEDEVMODE::SET
         + GUSBCFG::FORCEHOSTMODE::CLEAR
         + GUSBCFG::ULPI_UTMI_SEL::CLEAR
@@ -172,10 +170,8 @@ fn init_device_fifos() {
     if used > total {
         let leftover = total.saturating_sub(rx + nptx + ep2tx);
         ep1tx = leftover;
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DEV FIFO total={} too small, shrink ep1tx={}",
-            total, ep1tx
-        ));
+        log::info!("USB-DEV FIFO total={} too small, shrink ep1tx={}",
+            total, ep1tx);
     }
 
     r.grxfsiz.set(rx & 0xffff);
@@ -191,14 +187,12 @@ fn init_device_fifos() {
         core::ptr::write_volatile((base() + 0x108) as *mut u32, dieptxf2);
     }
 
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV FIFO total={} GRXFSIZ={:#x} GNPTXFSIZ={:#x} DIEPTXF1={:#x} DIEPTXF2={:#x}",
+    log::info!("USB-DEV FIFO total={} GRXFSIZ={:#x} GNPTXFSIZ={:#x} DIEPTXF1={:#x} DIEPTXF2={:#x}",
         total,
         r.grxfsiz.get(),
         r.gnptxfsiz.get(),
         dieptxf1,
-        dieptxf2,
-    ));
+        dieptxf2,);
 
     let _ = used;
 }
@@ -258,7 +252,7 @@ fn ep0_pre_config() {
 pub fn dwc2_device_init() -> UsbResult<()> {
     if base() == 0 {
         return Err(UsbError::Hardware(
-            "DWC2 base not set (call platform::set_dwc2_base_virt)",
+            "DWC2 base not set (call set_dwc2_base_virt)",
         ));
     }
     let r = regs();
@@ -318,13 +312,11 @@ pub fn dwc2_device_init() -> UsbResult<()> {
     // 屏蔽掉所有 GINTMSK——本驱动靠轮询 GINTSTS。
     regs().gintmsk.set(0);
 
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV init done speed={:?} GUSBCFG={:#010x} DCFG={:#010x} DCTL={:#010x}",
+    log::info!("USB-DEV init done speed={:?} GUSBCFG={:#010x} DCFG={:#010x} DCTL={:#010x}",
         speed,
         regs().gusbcfg.get(),
         regs().dcfg.get(),
-        regs().dctl.get(),
-    ));
+        regs().dctl.get(),);
 
     Ok(())
 }
@@ -337,10 +329,8 @@ pub fn dwc2_device_softconnect() {
         return;
     }
     regs().dctl.modify(DCTL::SFTDISCON::CLEAR);
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV softconnect: DCTL={:#010x}",
-        regs().dctl.get()
-    ));
+    log::info!("USB-DEV softconnect: DCTL={:#010x}",
+        regs().dctl.get());
 }
 
 /// 主动断开：写 `DCTL.SFTDISCON=1`，PC 端立刻看到 disconnect。
@@ -357,27 +347,21 @@ pub fn dwc2_device_dump_status(tag: &str) {
         return;
     }
     let r = regs();
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV {tag} GINTSTS={:#010x} GUSBCFG={:#010x} DCFG={:#010x} DCTL={:#010x} DSTS={:#010x}",
+    log::info!("USB-DEV {tag} GINTSTS={:#010x} GUSBCFG={:#010x} DCFG={:#010x} DCTL={:#010x} DSTS={:#010x}",
         r.gintsts.get(),
         r.gusbcfg.get(),
         r.dcfg.get(),
         r.dctl.get(),
-        r.dsts.get()
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV {tag} DAINT={:#010x} DAINTMSK={:#010x} DIEPCTL0={:#010x} DOEPCTL0={:#010x}",
+        r.dsts.get());
+    log::info!("USB-DEV {tag} DAINT={:#010x} DAINTMSK={:#010x} DIEPCTL0={:#010x} DOEPCTL0={:#010x}",
         r.daint.get(),
         r.daintmsk.get(),
         r.diep[0].diepctl.get(),
-        r.doep[0].doepctl.get(),
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-DEV {tag} DOEPINT0={:#010x} DOEPTSIZ0={:#010x} DOEPDMA0={:#010x} DIEPINT0={:#010x} DIEPTSIZ0={:#010x}",
+        r.doep[0].doepctl.get(),);
+    log::info!("USB-DEV {tag} DOEPINT0={:#010x} DOEPTSIZ0={:#010x} DOEPDMA0={:#010x} DIEPINT0={:#010x} DIEPTSIZ0={:#010x}",
         r.doep[0].doepint.get(),
         r.doep[0].doeptsiz.get(),
         r.doep[0].doepdma.get(),
         r.diep[0].diepint.get(),
-        r.diep[0].dieptsiz.get(),
-    ));
+        r.diep[0].dieptsiz.get(),);
 }

@@ -6,11 +6,11 @@
 //!
 //! SG2002 芯片包含 5 组 GPIO 控制器:
 //!
-//! - **GPIO0 (GPIOA)**: Active Domain, 基地址 0x0302_0000
-//! - **GPIO1 (GPIOB)**: Active Domain, 基地址 0x0302_1000
-//! - **GPIO2 (GPIOC)**: Active Domain, 基地址 0x0302_2000
-//! - **GPIO3 (GPIOD)**: Active Domain, 基地址 0x0302_3000
-//! - **RTCSYS_GPIO**: No-die Domain, 基地址 0x0502_1000
+//! - **GPIO0 (GPIOA)**: Active Domain，[`crate::soc::GPIO0_BASE`]
+//! - **GPIO1 (GPIOB)**: Active Domain，[`crate::soc::GPIO1_BASE`]
+//! - **GPIO2 (GPIOC)**: Active Domain，[`crate::soc::GPIO2_BASE`]
+//! - **GPIO3 (GPIOD)**: Active Domain，[`crate::soc::GPIO3_BASE`]
+//! - **RTCSYS_GPIO**: No-die Domain，[`crate::soc::RTCSYS_GPIO_BASE`]
 //!
 //! 每组 GPIO 最多支持 32 个引脚。
 //!
@@ -27,26 +27,24 @@
 //! # 使用示例
 //!
 //! ```rust,ignore
-//! use sg200x_bsp::gpio::{GPIO, GPIOPort, Direction, InterruptType};
+//! use sg200x_bsp::gpio::{GPIO, Direction, InterruptType};
+//! use sg200x_bsp::soc::GPIO0_BASE;
 //!
 //! // 创建 GPIO0 实例
-//! let gpio0 = unsafe { GPIO::new(GPIOPort::GPIO0) };
+//! let gpio0 = unsafe { GPIO::new(GPIO0_BASE) };
 //!
-//! // 配置引脚 0 为输出模式
-//! gpio0.set_direction(0, Direction::Output);
+//! // 通过 pin() 获取单引脚句柄
+//! let led = gpio0.pin(0);
+//! led.into_output();
+//! led.set(true);
 //!
-//! // 设置引脚 0 为高电平
-//! gpio0.set(0, true);
+//! let button = gpio0.pin(1);
+//! button.into_input();
+//! let pressed = button.is_high();
 //!
-//! // 配置引脚 1 为输入模式
-//! gpio0.set_direction(1, Direction::Input);
-//!
-//! // 读取引脚 1 的电平 (true = 高电平, false = 低电平)
-//! let is_high = gpio0.read(1);
-//!
-//! // 配置引脚 2 的中断 (上升沿触发)
-//! gpio0.configure_interrupt(2, InterruptType::RisingEdge);
-//! gpio0.set_interrupt(2, true);
+//! let irq_pin = gpio0.pin(2);
+//! irq_pin.configure_interrupt(InterruptType::RisingEdge);
+//! irq_pin.set_interrupt(true);
 //! ```
 
 use tock_registers::{
@@ -55,24 +53,9 @@ use tock_registers::{
     registers::{ReadOnly, ReadWrite, WriteOnly},
 };
 
-// ============================================================================
-// GPIO 基地址定义
-// ============================================================================
-
-/// GPIO0 (GPIOA) 基地址
-pub const GPIO0_BASE: usize = 0x0302_0000;
-
-/// GPIO1 (GPIOB) 基地址
-pub const GPIO1_BASE: usize = 0x0302_1000;
-
-/// GPIO2 (GPIOC) 基地址
-pub const GPIO2_BASE: usize = 0x0302_2000;
-
-/// GPIO3 (GPIOD) 基地址
-pub const GPIO3_BASE: usize = 0x0302_3000;
-
-/// RTCSYS_GPIO 基地址
-pub const RTCSYS_GPIO_BASE: usize = 0x0502_1000;
+pub use crate::soc::{
+    GPIO0_BASE, GPIO1_BASE, GPIO2_BASE, GPIO3_BASE, RTCSYS_GPIO_BASE,
+};
 
 // ============================================================================
 // GPIO 寄存器位域定义
@@ -244,34 +227,6 @@ register_structs! {
 // GPIO 枚举类型定义
 // ============================================================================
 
-/// GPIO 端口标识
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GPIOPort {
-    /// GPIO0 (GPIOA) - Active Domain
-    GPIO0,
-    /// GPIO1 (GPIOB) - Active Domain
-    GPIO1,
-    /// GPIO2 (GPIOC) - Active Domain
-    GPIO2,
-    /// GPIO3 (GPIOD) - Active Domain
-    GPIO3,
-    /// RTCSYS_GPIO - No-die Domain
-    RTCSysGPIO,
-}
-
-impl GPIOPort {
-    /// 获取 GPIO 端口的基地址
-    pub const fn base_address(self) -> usize {
-        match self {
-            GPIOPort::GPIO0 => GPIO0_BASE,
-            GPIOPort::GPIO1 => GPIO1_BASE,
-            GPIOPort::GPIO2 => GPIO2_BASE,
-            GPIOPort::GPIO3 => GPIO3_BASE,
-            GPIOPort::RTCSysGPIO => RTCSYS_GPIO_BASE,
-        }
-    }
-}
-
 /// GPIO 引脚方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -299,15 +254,11 @@ pub enum InterruptType {
 // GPIO 驱动实现
 // ============================================================================
 
-/// GPIO 驱动结构体
+/// GPIO 控制器（一组最多 32 根线）。
 ///
-/// 提供对单个 GPIO 端口的访问接口
-#[derive(Clone)]
+/// 单引脚操作请通过 [`GPIO::pin`] 取得 [`GPIOPin`]。
 pub struct GPIO {
-    /// GPIO 寄存器组
     regs: &'static GpioRegisters,
-    /// GPIO 端口标识
-    port: GPIOPort,
 }
 
 impl GPIO {
@@ -315,7 +266,7 @@ impl GPIO {
     ///
     /// # 参数
     ///
-    /// - `port`: GPIO 端口标识
+    /// - `base`: GPIO 控制器 MMIO 基地址（见 [`crate::soc::GPIO0_BASE`] 等）
     ///
     /// # Safety
     ///
@@ -326,39 +277,15 @@ impl GPIO {
     /// # 示例
     ///
     /// ```rust,ignore
-    /// let gpio0 = unsafe { GPIO::new(GPIOPort::GPIO0) };
+    /// use sg200x_bsp::soc::GPIO0_BASE;
+    /// let gpio0 = unsafe { GPIO::new(GPIO0_BASE) };
     /// ```
-    pub fn new(port: GPIOPort) -> Self {
-        unsafe {
-            Self {
-                regs: &*(port.base_address() as *const GpioRegisters),
-                port,
-            }
-        }
-    }
-
-    /// 从指定基地址创建 GPIO 驱动实例
-    ///
-    /// # 参数
-    ///
-    /// - `base`: GPIO 寄存器基地址
-    /// - `port`: GPIO 端口标识 (用于标识目的)
-    ///
-    /// # Safety
-    ///
-    /// 调用者必须确保基地址有效且可访问
-    pub unsafe fn from_base_address(base: usize, port: GPIOPort) -> Self {
+    pub unsafe fn new(base: usize) -> Self {
         unsafe {
             Self {
                 regs: &*(base as *const GpioRegisters),
-                port,
             }
         }
-    }
-
-    /// 获取 GPIO 端口标识
-    pub fn port(&self) -> GPIOPort {
-        self.port
     }
 
     /// 获取 GPIO 寄存器组的引用
@@ -366,136 +293,30 @@ impl GPIO {
         self.regs
     }
 
-    // ========================================================================
-    // 基本 GPIO 操作
-    // ========================================================================
-
-    /// 设置引脚方向
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `direction`: 引脚方向
+    /// 返回指定引脚的操作句柄。
     ///
     /// # Panics
     ///
-    /// 如果 `pin >= 32` 则 panic
-    pub fn set_direction(&self, pin: u8, direction: Direction) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        match direction {
-            Direction::Input => {
-                let current = self.regs.swporta_ddr.get();
-                self.regs.swporta_ddr.set(current & !mask);
-            }
-            Direction::Output => {
-                let current = self.regs.swporta_ddr.get();
-                self.regs.swporta_ddr.set(current | mask);
-            }
+    /// `index >= 32` 时 panic。
+    pub fn pin(&self, index: u8) -> GPIOPin<'_> {
+        assert!(index < 32, "GPIO pin number must be less than 32");
+        GPIOPin {
+            gpio: self,
+            index,
         }
-    }
-
-    /// 获取引脚方向
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    ///
-    /// # 返回
-    ///
-    /// 引脚当前的方向配置
-    pub fn get_direction(&self, pin: u8) -> Direction {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        if (self.regs.swporta_ddr.get() & mask) != 0 {
-            Direction::Output
-        } else {
-            Direction::Input
-        }
-    }
-
-    /// 设置引脚输出电平
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `high`: true 为高电平，false 为低电平
-    ///
-    /// # 注意
-    ///
-    /// 引脚必须先配置为输出模式才能正常工作
-    pub fn set(&self, pin: u8, high: bool) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        let current = self.regs.swporta_dr.get();
-        if high {
-            self.regs.swporta_dr.set(current | mask);
-        } else {
-            self.regs.swporta_dr.set(current & !mask);
-        }
-    }
-
-    /// 翻转引脚电平
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    pub fn toggle(&self, pin: u8) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        let current = self.regs.swporta_dr.get();
-        self.regs.swporta_dr.set(current ^ mask);
-    }
-
-    /// 读取引脚电平
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    ///
-    /// # 返回
-    ///
-    /// - `true`: 高电平
-    /// - `false`: 低电平
-    /// - 输入模式: 返回引脚上的实际电平
-    /// - 输出模式: 返回数据寄存器中的值
-    pub fn read(&self, pin: u8) -> bool {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        (self.regs.ext_porta.get() & mask) != 0
-    }
-
-    /// 检查引脚是否为高电平
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    #[inline]
-    pub fn is_high(&self, pin: u8) -> bool {
-        self.read(pin)
-    }
-
-    /// 检查引脚是否为低电平
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    #[inline]
-    pub fn is_low(&self, pin: u8) -> bool {
-        !self.read(pin)
     }
 
     // ========================================================================
-    // 批量 GPIO 操作
+    // 端口级 GPIO 操作
     // ========================================================================
 
     /// 设置多个引脚的方向
     ///
     /// # 参数
     ///
-    /// - `mask`: 要设置为输出的引脚掩码 (位为 1 表示输出，位为 0 表示输入)
-    pub fn set_direction_mask(&self, mask: u32) {
-        self.regs.swporta_ddr.set(mask);
+    /// - `dirs`: 要设置为输出的引脚掩码 (位为 1 表示输出，位为 0 表示输入)
+    pub fn set_direction(&self, dirs: u32) {
+        self.regs.swporta_ddr.set(dirs);
     }
 
     /// 获取所有引脚的方向
@@ -503,7 +324,7 @@ impl GPIO {
     /// # 返回
     ///
     /// 方向掩码 (位为 1 表示输出，位为 0 表示输入)
-    pub fn get_direction_mask(&self) -> u32 {
+    pub fn get_direction(&self) -> u32 {
         self.regs.swporta_ddr.get()
     }
 
@@ -526,152 +347,22 @@ impl GPIO {
     }
 
     // ========================================================================
-    // 中断配置
+    // 端口级中断
     // ========================================================================
 
-    /// 配置引脚中断类型
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `int_type`: 中断触发类型
-    ///
-    /// # 注意
-    ///
-    /// 配置中断类型后，还需要调用 `set_interrupt(pin, true)` 来启用中断
-    pub fn configure_interrupt(&self, pin: u8, int_type: InterruptType) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-
-        // 配置中断类型和极性
-        let (is_edge, is_high_or_rising) = match int_type {
-            InterruptType::LowLevel => (false, false),
-            InterruptType::HighLevel => (false, true),
-            InterruptType::FallingEdge => (true, false),
-            InterruptType::RisingEdge => (true, true),
-        };
-
-        // 设置中断类型 (电平/边沿)
-        let current_type = self.regs.inttype_level.get();
-        if is_edge {
-            self.regs.inttype_level.set(current_type | mask);
-        } else {
-            self.regs.inttype_level.set(current_type & !mask);
-        }
-
-        // 设置中断极性
-        let current_polarity = self.regs.int_polarity.get();
-        if is_high_or_rising {
-            self.regs.int_polarity.set(current_polarity | mask);
-        } else {
-            self.regs.int_polarity.set(current_polarity & !mask);
-        }
-    }
-
-    /// 设置引脚中断使能
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `enable`: true 启用中断，false 禁用中断
-    pub fn set_interrupt(&self, pin: u8, enable: bool) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        let current = self.regs.inten.get();
-        if enable {
-            self.regs.inten.set(current | mask);
-        } else {
-            self.regs.inten.set(current & !mask);
-        }
-    }
-
-    /// 设置引脚中断屏蔽
-    ///
-    /// 屏蔽后，中断不会传递到中断控制器，但原始中断状态仍会更新
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `masked`: true 屏蔽中断，false 取消屏蔽
-    pub fn set_interrupt_mask(&self, pin: u8, masked: bool) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        let current = self.regs.intmask.get();
-        if masked {
-            self.regs.intmask.set(current | mask);
-        } else {
-            self.regs.intmask.set(current & !mask);
-        }
-    }
-
-    /// 清除引脚中断
-    ///
-    /// 用于清除边沿触发类型的中断
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    pub fn clear_interrupt(&self, pin: u8) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        self.regs.porta_eoi.set(mask);
-    }
-
-    /// 清除所有中断
+    /// 清除所有引脚的中断（写 EOI 全 1）。
     pub fn clear_all_interrupts(&self) {
         self.regs.porta_eoi.set(0xFFFF_FFFF);
     }
 
-    /// 获取中断状态 (屏蔽后)
-    ///
-    /// # 返回
-    ///
-    /// 中断状态掩码，位为 1 表示对应引脚有中断待处理
+    /// 中断状态（屏蔽后）；位为 1 表示对应引脚有待处理中断。
     pub fn get_interrupt_status(&self) -> u32 {
         self.regs.intstatus.get()
     }
 
-    /// 获取原始中断状态 (屏蔽前)
-    ///
-    /// # 返回
-    ///
-    /// 原始中断状态掩码
+    /// 原始中断状态（屏蔽前）。
     pub fn get_raw_interrupt_status(&self) -> u32 {
         self.regs.raw_intstatus.get()
-    }
-
-    /// 检查指定引脚是否有中断待处理
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    pub fn is_interrupt_pending(&self, pin: u8) -> bool {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        (self.regs.intstatus.get() & mask) != 0
-    }
-
-    // ========================================================================
-    // 去抖动配置
-    // ========================================================================
-
-    /// 设置引脚去抖动
-    ///
-    /// 启用后，输入信号需要在外部时钟的两个周期内保持稳定才会被处理
-    ///
-    /// # 参数
-    ///
-    /// - `pin`: 引脚编号 (0-31)
-    /// - `enable`: true 启用去抖动，false 禁用去抖动
-    pub fn set_debounce(&self, pin: u8, enable: bool) {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        let mask = 1u32 << pin;
-        let current = self.regs.debounce.get();
-        if enable {
-            self.regs.debounce.set(current | mask);
-        } else {
-            self.regs.debounce.set(current & !mask);
-        }
     }
 
     // ========================================================================
@@ -691,140 +382,160 @@ impl GPIO {
 }
 
 // ============================================================================
-// GpioPin 单引脚抽象
+// GPIOPin 单引脚抽象
 // ============================================================================
 
-/// 单个 GPIO 引脚的抽象
-///
-/// 提供对单个引脚的便捷操作接口
-pub struct GPIOPin {
-    /// GPIO 控制器引用
-    gpio: GPIO,
-    /// 引脚编号
-    pin: u8,
+/// 单根 GPIO 线；由 [`GPIO::pin`] 创建，不可单独构造。
+pub struct GPIOPin<'a> {
+    gpio: &'a GPIO,
+    index: u8,
 }
 
-impl GPIOPin {
-    /// 创建新的 GPIO 引脚实例
-    ///
-    /// # 参数
-    ///
-    /// - `gpio`: GPIO 控制器引用
-    /// - `pin`: 引脚编号 (0-31)
-    ///
-    /// # Panics
-    ///
-    /// 如果 `pin >= 32` 则 panic
-    pub fn new(gpio: &GPIO, pin: u8) -> Self {
-        assert!(pin < 32, "GPIO pin number must be less than 32");
-        Self { gpio: gpio.clone(), pin }
+impl<'a> GPIOPin<'a> {
+    #[inline]
+    fn mask(&self) -> u32 {
+        1u32 << self.index
     }
 
-    pub fn with_port(port: GPIOPort, pin: u8) -> Self {
-        Self::new(&GPIO::new(port), pin)
+    #[inline]
+    fn regs(&self) -> &GpioRegisters {
+        self.gpio.regs
     }
 
-    /// 获取引脚编号
-    pub fn pin(&self) -> u8 {
-        self.pin
+    /// 引脚编号 (0–31)。
+    pub fn index(&self) -> u8 {
+        self.index
     }
 
-    /// 设置引脚方向
+    /// 设置引脚方向。
     pub fn set_direction(&self, direction: Direction) {
-        self.gpio.set_direction(self.pin, direction);
+        let mask = self.mask();
+        let current = self.regs().swporta_ddr.get();
+        let value = match direction {
+            Direction::Input => current & !mask,
+            Direction::Output => current | mask,
+        };
+        self.regs().swporta_ddr.set(value);
     }
 
-    /// 获取引脚方向
+    /// 获取引脚方向。
     pub fn get_direction(&self) -> Direction {
-        self.gpio.get_direction(self.pin)
+        if self.regs().swporta_ddr.get() & self.mask() != 0 {
+            Direction::Output
+        } else {
+            Direction::Input
+        }
     }
 
-    /// 配置为输入模式
+    /// 配置为输入模式。
     pub fn into_input(&self) {
         self.set_direction(Direction::Input);
     }
 
-    /// 配置为输出模式
+    /// 配置为输出模式。
     pub fn into_output(&self) {
         self.set_direction(Direction::Output);
     }
 
-    /// 设置引脚电平
-    ///
-    /// # 参数
-    ///
-    /// - `high`: true 为高电平，false 为低电平
+    /// 设置输出电平（须先配置为输出）。
     pub fn set(&self, high: bool) {
-        self.gpio.set(self.pin, high);
+        let mask = self.mask();
+        let current = self.regs().swporta_dr.get();
+        if high {
+            self.regs().swporta_dr.set(current | mask);
+        } else {
+            self.regs().swporta_dr.set(current & !mask);
+        }
     }
 
-    /// 翻转电平
+    /// 翻转输出电平。
     pub fn toggle(&self) {
-        self.gpio.toggle(self.pin);
+        let mask = self.mask();
+        let current = self.regs().swporta_dr.get();
+        self.regs().swporta_dr.set(current ^ mask);
     }
 
-    /// 读取引脚电平
-    ///
-    /// # 返回
-    ///
-    /// - `true`: 高电平
-    /// - `false`: 低电平
+    /// 读取引脚电平（输入为 pad 实际电平）。
     pub fn read(&self) -> bool {
-        self.gpio.read(self.pin)
+        self.regs().ext_porta.get() & self.mask() != 0
     }
 
-    /// 检查是否为高电平
     #[inline]
     pub fn is_high(&self) -> bool {
-        self.gpio.is_high(self.pin)
+        self.read()
     }
 
-    /// 检查是否为低电平
     #[inline]
     pub fn is_low(&self) -> bool {
-        self.gpio.is_low(self.pin)
+        !self.read()
     }
 
-    /// 配置中断类型
+    /// 配置中断类型；之后调用 [`set_interrupt`](Self::set_interrupt) 启用。
     pub fn configure_interrupt(&self, int_type: InterruptType) {
-        self.gpio.configure_interrupt(self.pin, int_type);
+        let mask = self.mask();
+        let (is_edge, is_high_or_rising) = match int_type {
+            InterruptType::LowLevel => (false, false),
+            InterruptType::HighLevel => (false, true),
+            InterruptType::FallingEdge => (true, false),
+            InterruptType::RisingEdge => (true, true),
+        };
+
+        let current_type = self.regs().inttype_level.get();
+        if is_edge {
+            self.regs().inttype_level.set(current_type | mask);
+        } else {
+            self.regs().inttype_level.set(current_type & !mask);
+        }
+
+        let current_polarity = self.regs().int_polarity.get();
+        if is_high_or_rising {
+            self.regs().int_polarity.set(current_polarity | mask);
+        } else {
+            self.regs().int_polarity.set(current_polarity & !mask);
+        }
     }
 
-    /// 设置中断使能
-    ///
-    /// # 参数
-    ///
-    /// - `enable`: true 启用中断，false 禁用中断
+    /// 启用或禁用中断。
     pub fn set_interrupt(&self, enable: bool) {
-        self.gpio.set_interrupt(self.pin, enable);
+        let mask = self.mask();
+        let current = self.regs().inten.get();
+        if enable {
+            self.regs().inten.set(current | mask);
+        } else {
+            self.regs().inten.set(current & !mask);
+        }
     }
 
-    /// 设置中断屏蔽
-    ///
-    /// # 参数
-    ///
-    /// - `masked`: true 屏蔽中断，false 取消屏蔽
+    /// 屏蔽中断（原始状态仍会更新）。
     pub fn set_interrupt_mask(&self, masked: bool) {
-        self.gpio.set_interrupt_mask(self.pin, masked);
+        let mask = self.mask();
+        let current = self.regs().intmask.get();
+        if masked {
+            self.regs().intmask.set(current | mask);
+        } else {
+            self.regs().intmask.set(current & !mask);
+        }
     }
 
-    /// 清除中断
+    /// 清除本引脚中断（边沿触发）。
     pub fn clear_interrupt(&self) {
-        self.gpio.clear_interrupt(self.pin);
+        self.regs().porta_eoi.set(self.mask());
     }
 
-    /// 检查是否有中断待处理
+    /// 本引脚是否有待处理中断。
     pub fn is_interrupt_pending(&self) -> bool {
-        self.gpio.is_interrupt_pending(self.pin)
+        self.regs().intstatus.get() & self.mask() != 0
     }
 
-    /// 设置去抖动
-    ///
-    /// # 参数
-    ///
-    /// - `enable`: true 启用去抖动，false 禁用去抖动
+    /// 启用或禁用输入去抖动。
     pub fn set_debounce(&self, enable: bool) {
-        self.gpio.set_debounce(self.pin, enable);
+        let mask = self.mask();
+        let current = self.regs().debounce.get();
+        if enable {
+            self.regs().debounce.set(current | mask);
+        } else {
+            self.regs().debounce.set(current & !mask);
+        }
     }
 }
 

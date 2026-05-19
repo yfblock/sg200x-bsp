@@ -30,14 +30,14 @@
 //! ```
 
 mod consts;
-mod utils;
 
 pub use consts::{BLOCK_SIZE, CmdError, CommandType, PowerLevel, ResponseType};
 pub use consts::{SD_DRIVER_BASE, SdmmcRegisters, TOP_BASE};
 
 use consts::*;
 use core::cell::Cell;
-use utils::{delay, delay_long, delay_short};
+
+use crate::utils::{delay, delay_long, delay_short};
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 

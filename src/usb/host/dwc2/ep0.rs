@@ -9,23 +9,18 @@ use tock_registers::LocalRegisterCopy;
 
 use crate::usb::error::{UsbError, UsbResult};
 use crate::utils::cache;
-use crate::usb::platform;
+use crate::usb;
 use crate::usb::setup;
 use super::mmio;
-use super::regs::{Dwc2HostChannel, Dwc2Regs, GHWCFG2, HCCHAR, HCINT, HCTSIZ, HFNUM};
+use super::regs::{Dwc2HostChannel, Dwc2Regs, HCCHAR, HCINT, HCTSIZ, HFNUM};
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 #[allow(dead_code)]
 pub type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 
 #[inline]
-fn base() -> usize {
-    platform::dwc2_base_virt()
-}
-
-#[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call platform::set_dwc2_base_virt)")
+    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 #[inline]
@@ -136,7 +131,7 @@ fn dma_ptr() -> *mut u8 {
 }
 
 fn dma_phys(off: usize) -> u32 {
-    unsafe { platform::usb_dma_phys_for(dma_ptr().add(off)) }
+    unsafe { usb::usb_dma_phys_for(dma_ptr().add(off)) }
 }
 
 #[inline]
@@ -147,85 +142,6 @@ fn usb_bus_fence_before_dma() {
     }
 }
 
-/// 枚举前打印 EP0/DMA 窗口 VA→PA 与 `GHWCFG2.ARCH`（调试用）。
-pub fn debug_log_ep0_dma_info() {
-    if base() == 0 {
-        crate::usb::log::usb_log_fmt(format_args!("USB-DBG ep0_dma: DWC2 base not set"));
-        return;
-    }
-    let r = regs();
-    unsafe {
-        let va = dma_ptr() as usize;
-        let pa_base = platform::usb_dma_phys_for(dma_ptr());
-        let pa_ep0 = platform::usb_dma_phys_for(dma_ptr().add(OFF_EP0));
-        let g2 = r.ghwcfg2.get();
-        let arch = r.ghwcfg2.read(GHWCFG2::ARCH);
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DBG ep0_dma va(buf)={:#010x} pa(buf)={:#010x} pa(setup)={:#010x}",
-            va, pa_base, pa_ep0
-        ));
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DBG GHWCFG2={:#010x} ARCH={} (0=slave 1=ext-dma 2=int-dma)",
-            g2, arch
-        ));
-        let snpsid = r.gsnpsid.get();
-        crate::usb::log::usb_log_fmt(format_args!(
-            "USB-DBG GSNPSID={:#010x} core_rev={:#06x}",
-            snpsid,
-            snpsid & 0xffff
-        ));
-        if arch == 2 {
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-DBG ARCH=2 为内部 DMA：主机通道必须用 HCDMA，不能关 DMA 改纯 FIFO/slave 枚举"
-            ));
-        }
-        if pa_base as usize == va {
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-DBG ep0_dma: VA==PA（恒等映射），HCDMA 地址与 Linux phys-virt-offset=0 一致"
-            ));
-        }
-    }
-}
-
-fn dump_channel_timeout_debug(ch: u32, phase: &'static str) {
-    if base() == 0 {
-        return;
-    }
-    let r = regs();
-    let c = channel(ch);
-    let hprt = r.hprt0.get();
-    let gint = r.gintsts.get();
-    let gintm = r.gintmsk.get();
-    let gahb = r.gahbcfg.get();
-    let grst = r.grstctl.get();
-    let gotg = r.gotgctl.get();
-    let hcchar = c.hcchar.get();
-    let hcint = c.hcint.get();
-    let hcintm = c.hcintmsk.get();
-    let hctsiz = c.hctsiz.get();
-    let hcdma = c.hcdma.get();
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT [{}] ch={} HPRT0={:#010x} (CONNSTS={} SPD={})",
-        phase,
-        ch,
-        hprt,
-        (hprt & 1) != 0,
-        (hprt >> 17) & 3
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT GINTSTS={:#010x} GINTMSK={:#010x} GAHBCFG={:#010x} GRSTCTL={:#010x}",
-        gint, gintm, gahb, grst
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT GOTGCTL={:#010x} HCCHAR={:#010x} HCINT={:#010x} HCINTMSK={:#010x}",
-        gotg, hcchar, hcint, hcintm
-    ));
-    crate::usb::log::usb_log_fmt(format_args!(
-        "USB-TOUT HCTSIZ={:#010x} HCDMA={:#010x}",
-        hctsiz, hcdma
-    ));
-}
-
 fn ch_wait_disabled(ch: u32) -> UsbResult<()> {
     let c = channel(ch);
     for _ in 0..2_000_000u32 {
@@ -234,7 +150,6 @@ fn ch_wait_disabled(ch: u32) -> UsbResult<()> {
         }
         spin_delay(8);
     }
-    dump_channel_timeout_debug(ch, "ch_wait_disabled");
     Err(UsbError::Timeout)
 }
 
@@ -264,7 +179,6 @@ fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
         }
         spin_delay(8);
     }
-    dump_channel_timeout_debug(ch, "ch_wait_halted");
     Err(UsbError::Timeout)
 }
 
@@ -295,11 +209,8 @@ unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<
         }
         if st.is_set(HCINT::XACTERR) {
             if xact_left == 0 {
-                crate::usb::log::usb_log_fmt(format_args!(
-                    "USB-XACT EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    ch, hcchar, hctsiz, dmap, st.get()
-                ));
-                dump_channel_timeout_debug(ch, "ch_xfer XACT exhausted");
+                log::info!("USB-XACT EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                    ch, hcchar, hctsiz, dmap, st.get());
                 return Err(UsbError::Protocol("ch xfer error (XACT)"));
             }
             xact_left -= 1;
@@ -309,10 +220,8 @@ unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<
         }
         if st.is_set(HCINT::NAK) {
             if attempt == NAK_RETRIES {
-                crate::usb::log::usb_log_fmt(format_args!(
-                    "USB-NAK EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    ch, hcchar, hctsiz, dmap, st.get()
-                ));
+                log::info!("USB-NAK EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                    ch, hcchar, hctsiz, dmap, st.get());
                 return Err(UsbError::Protocol("ch xfer NAK exhausted"));
             }
             // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF），这里用粗粒度 spin。
@@ -320,10 +229,8 @@ unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<
             continue;
         }
         if !st.is_set(HCINT::XFERCOMPL) {
-            crate::usb::log::usb_log_fmt(format_args!(
-                "USB-CHHLTD-NO-XFER ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                ch, hcchar, hctsiz, dmap, st.get()
-            ));
+            log::info!("USB-CHHLTD-NO-XFER ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
+                ch, hcchar, hctsiz, dmap, st.get());
             return Err(UsbError::Protocol("CHHLTD without XFERCOMPL"));
         }
         return Ok(st);
