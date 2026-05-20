@@ -32,7 +32,6 @@
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::host::dwc2::mmio;
 use crate::usb::host::dwc2::regs::{Dwc2Regs, DCFG, DIEPCTL, DOEPCTL, DSTS};
 use crate::usb;
 use crate::utils::cache;
@@ -151,7 +150,7 @@ fn dma_phys(p: *const u8) -> u32 {
 
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set")
+    usb::dwc2_regs().expect("DWC2 base not set")
 }
 
 /// EP0 服务对象。轮询 [`service`] 推动 EP0 + class 数据 EP。

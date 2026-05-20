@@ -14,10 +14,6 @@ use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 use crate::usb::error::{UsbError, UsbResult};
 use crate::usb;
 #[allow(unused_imports)]
-use crate::soc::CV182X_USB2_PHY_BASE;
-
-use super::mmio;
-#[allow(unused_imports)]
 use super::regs::{
     Dwc2Regs, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRSTCTL,
     GUSBCFG, HCFG,
@@ -32,7 +28,7 @@ fn base() -> usize {
 /// 在外层先做 [`base`] 校验）。
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
+    usb::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
@@ -70,6 +66,10 @@ fn spin_delay(iterations: u32) {
 }
 
 /// 读取硬件配置寄存器（上电后通常非零，用于 M0/M1「控制器是否可见」自检）。
+///
+/// # Safety
+///
+/// 调用方须已通过 [`set_dwc2_base_virt`] 设置有效 MMIO 基址；在未完成控制器初始化的上下文中并发访问同一寄存器块可能导致未定义行为。
 ///
 /// # 返回值
 /// `Ok((GHWCFG1, GHWCFG2, GHWCFG3))` 原始寄存器值；基址未设或读全零则返回 [`UsbError::Hardware`]。
@@ -185,6 +185,10 @@ fn init_hcfg_fs_ls() {
 }
 
 /// 读取根端口寄存器 `HPRT0` 原始值（调试与端口状态轮询）。
+///
+/// # Safety
+///
+/// 调用方须已通过 [`set_dwc2_base_virt`] 设置有效 MMIO 基址；与主机栈其它路径并发读写 `HPRT0` 时须自行保证互斥。
 ///
 /// # 返回值
 /// 未设置 MMIO 基址时返回 **0** 且不访问硬件；否则为 `HPRT0` 当前读回值。
@@ -343,38 +347,6 @@ pub fn debug_dump_root_port_hw(tag: &str) {
         r.gintsts.get(),
         r.pcgctl.get(),
         r.hcfg.get());
-    #[cfg(feature = "cv182x-host")]
-    {
-        let phy = CV182X_USB2_PHY_BASE;
-        unsafe {
-            log::debug!("USB-PHY {} 00={:#010x} 04={:#010x} 08={:#010x} 0c={:#010x}",
-                tag,
-                mmio::read32(phy + 0x00),
-                mmio::read32(phy + 0x04),
-                mmio::read32(phy + 0x08),
-                mmio::read32(phy + 0x0c),);
-            log::debug!("USB-PHY {} 10={:#010x} 14={:#010x} 18={:#010x} 1c={:#010x}",
-                tag,
-                mmio::read32(phy + 0x10),
-                mmio::read32(phy + 0x14),
-                mmio::read32(phy + 0x18),
-                mmio::read32(phy + 0x1c),);
-            log::debug!("USB-PHY {} 20={:#010x} 24={:#010x} 28={:#010x} 2c={:#010x}",
-                tag,
-                mmio::read32(phy + 0x20),
-                mmio::read32(phy + 0x24),
-                mmio::read32(phy + 0x28),
-                mmio::read32(phy + 0x2c),);
-            log::debug!("USB-PHY {} 30={:#010x} 3c={:#010x} 40={:#010x} 48={:#010x} 4c={:#010x} 50={:#010x}",
-                tag,
-                mmio::read32(phy + 0x30),
-                mmio::read32(phy + 0x3c),
-                mmio::read32(phy + 0x40),
-                mmio::read32(phy + 0x48),
-                mmio::read32(phy + 0x4c),
-                mmio::read32(phy + 0x50),);
-        }
-    }
 }
 
 // --- CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）---
@@ -528,7 +500,8 @@ fn init_gahb_dma_cv182x() {
 /// `utmi_chgdet_prepare`/`utmi_reset` 仅在 `CONFIG_USB_DWC2_PERIPHERAL` 充电检测里使用）。
 #[cfg(feature = "cv182x-host")]
 fn cv182x_usb2_phy_host_clear_utmi_override() {
-    let phy = mmio::cv182x_phy_regs();
+    let phy = usb::cv182x_phy_regs()
+        .expect("CV182x USB2 PHY base not set (call set_cv182x_phy_base_virt)");
     let old = phy.reg014.get();
     phy.reg014.set(0);
     spin_delay(200_000);

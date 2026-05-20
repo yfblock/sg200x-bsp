@@ -211,8 +211,18 @@ pub unsafe fn dcache_invalidate_after_dma(_ptr: *mut u8, _len: usize) {
     unsafe { core::arch::asm!("fence rw, rw", options(nostack)) }
 }
 
+/// 非 AArch64/RISC-V 目标：空操作占位，语义与 [`dcache_clean_for_dma`] 一致。
+///
+/// # Safety
+///
+/// 无实际操作；在未支持 cache 维护的平台上可安全调用。
 #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
 pub unsafe fn dcache_clean_for_dma(_ptr: *const u8, _len: usize) {}
 
+/// 非 AArch64/RISC-V 目标：空操作占位，语义与 [`dcache_invalidate_after_dma`] 一致。
+///
+/// # Safety
+///
+/// 无实际操作；在未支持 cache 维护的平台上可安全调用。
 #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
 pub unsafe fn dcache_invalidate_after_dma(_ptr: *mut u8, _len: usize) {}

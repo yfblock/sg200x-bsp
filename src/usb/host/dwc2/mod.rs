@@ -5,12 +5,10 @@
 //!
 //! 子模块：
 //! - [`regs`]：`tock-registers` 寄存器/位域/主机通道结构。
-//! - [`mmio`]：虚拟基址 → `Dwc2Regs` / `Dwc2HostChannel` 视图；CV182x PHY 离散读。
 //! - [`controller`]：上电、软复位、Force Host、FIFO、`HPRT0` 根口操作。
 //! - [`ep0`]：SETUP/Data/Status 调度、MSC/UVC 共用 DMA 窗。
 
 pub mod regs;
-pub mod mmio;
 pub mod controller;
 pub mod ep0;
 

@@ -221,7 +221,7 @@ impl Pwm {
 
         // 计算周期拍数
         let period = self.clock_frequency() / frequency_hz;
-        if period < 2 || period > PWM_MAX_PERIOD {
+        if !(2..=PWM_MAX_PERIOD).contains(&period) {
             return Err(PwmError::InvalidPeriod);
         }
 
@@ -252,7 +252,7 @@ impl Pwm {
         hlperiod: u32,
         polarity: PwmPolarity,
     ) -> Result<(), PwmError> {
-        if period < 2 || period > PWM_MAX_PERIOD {
+        if !(2..=PWM_MAX_PERIOD).contains(&period) {
             return Err(PwmError::InvalidPeriod);
         }
         if hlperiod >= period {
@@ -497,7 +497,7 @@ impl Pwm {
         }
 
         let period = self.clock_frequency() / frequency_hz;
-        if period < 2 || period > PWM_MAX_PERIOD {
+        if !(2..=PWM_MAX_PERIOD).contains(&period) {
             return Err(PwmError::InvalidPeriod);
         }
 

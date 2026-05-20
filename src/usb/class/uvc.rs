@@ -308,14 +308,14 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                     let n = ival_type as usize;
                     let mut p = i + 26;
                     for _ in 0..n {
-                        if p + 4 > i + bl as usize { break; }
+                        if p + 4 > i + bl { break; }
                         let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
                         if v > 0 && v < min_ival { min_ival = v; }
                         p += 4;
                     }
                 }
-                let fps_x100 = if dflt_ival > 0 { 1_000_000_00u32 / dflt_ival.max(1) } else { 0 };
-                let fps_min_x100 = if min_ival > 0 { 1_000_000_00u32 / min_ival.max(1) } else { 0 };
+                let fps_x100 = if dflt_ival > 0 { 100_000_000_u32 / dflt_ival.max(1) } else { 0 };
+                let fps_min_x100 = if min_ival > 0 { 100_000_000_u32 / min_ival.max(1) } else { 0 };
                 log::info!("UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
                     w, h,
                     fps_x100 / 100, fps_x100 % 100,
@@ -539,7 +539,7 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
 
     let mut cur_ifc_class = 0u8;
     let mut cur_ifc_sub = 0u8;
-    let mut cur_ifc_num = 0u8;
+    let mut cur_ifc_num;
     let mut out = UvcControlEntities::default();
     let mut found_vc = false;
 
@@ -566,10 +566,10 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
             let st = cfg[i + 2];
             match st {
                 VC_HEADER => {}
-                VC_INPUT_TERMINAL => {
+                VC_INPUT_TERMINAL
                     // bLength=15+x，bUnitID@3, wTerminalType@4..6, bAssocTerm@6,
                     // 后续 wObjectiveFocalLengthMin/Max + wOcularFocalLength + bControlSize@14, bmControls@15..
-                    if bl >= 15 {
+                    if bl >= 15 => {
                         let id = cfg[i + 3];
                         let tt = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
                         if tt == ITT_CAMERA {
@@ -583,10 +583,9 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
                             out.ct_controls = bm;
                         }
                     }
-                }
-                VC_PROCESSING_UNIT => {
+                VC_PROCESSING_UNIT
                     // bLength=10+n，bUnitID@3, bSourceID@4, wMaxMultiplier@5..7, bControlSize@7, bmControls@8..
-                    if bl >= 9 {
+                    if bl >= 9 => {
                         let id = cfg[i + 3];
                         let csize = cfg[i + 7] as usize;
                         let cmax = csize.min(bl.saturating_sub(8)).min(4);
@@ -597,7 +596,6 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
                         out.processing_unit_id = Some(id);
                         out.pu_controls = bm;
                     }
-                }
                 _ => {}
             }
         }
@@ -701,58 +699,58 @@ fn try_set_cur_u16(
     dwc2_ep0::ep0_control_write(dev, setup, ep0_mps, &buf).is_ok()
 }
 
-/// 把 ProcessingUnit 的 1/2 字节控制项设到 `override_val`；为 `None` 则用 `GET_DEF`。
-/// 只有 `bmControls` 标记支持的 selector 才会发送。
-fn pu_apply_one(
-    dev: u32,
-    ep0_mps: u32,
-    vc_if: u8,
-    pu: u8,
-    bm: u32,
+/// ProcessingUnit 单项控制描述（selector / 宽度 / 可选覆盖值）。
+struct PuCtrl {
     bit: u32,
     selector: u8,
     width: u8,
-    name: &str,
+    name: &'static str,
     override_val: Option<u16>,
-) {
-    if (bm & (1u32 << bit)) == 0 {
+}
+
+/// 把 ProcessingUnit 的 1/2 字节控制项设到 `override_val`；为 `None` 则用 `GET_DEF`。
+/// 只有 `bmControls` 标记支持的 selector 才会发送。
+fn pu_apply_one(dev: u32, ep0_mps: u32, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl) {
+    if (bm & (1u32 << ctrl.bit)) == 0 {
         return;
     }
-    let want_src = override_val.map(|_| "override").unwrap_or("def");
-    match width {
+    let want_src = ctrl.override_val.map(|_| "override").unwrap_or("def");
+    match ctrl.width {
         1 => {
-            let cur = try_get_cur_u8(dev, ep0_mps, vc_if, pu, selector);
-            let want = match override_val {
+            let cur = try_get_cur_u8(dev, ep0_mps, vc_if, pu, ctrl.selector);
+            let want = match ctrl.override_val {
                 Some(v) => Some(v as u8),
-                None => try_get_def_u8(dev, ep0_mps, vc_if, pu, selector),
+                None => try_get_def_u8(dev, ep0_mps, vc_if, pu, ctrl.selector),
             };
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
-                    let ok = try_set_cur_u8(dev, ep0_mps, vc_if, pu, selector, d);
+                    let ok = try_set_cur_u8(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
                     log::info!(
-                        "UVC: PU.{name} {c} -> {d} ({want_src}, {})",
+                        "UVC: PU.{} {c} -> {d} ({want_src}, {})",
+                        ctrl.name,
                         if ok { "ok" } else { "set 失败" }
                     );
                 }
-                (None, _) => log::warn!("UVC: PU.{name} GET_CUR 失败"),
+                (None, _) => log::warn!("UVC: PU.{} GET_CUR 失败", ctrl.name),
                 _ => {}
             }
         }
         2 => {
-            let cur = try_get_cur_u16(dev, ep0_mps, vc_if, pu, selector);
-            let want = match override_val {
+            let cur = try_get_cur_u16(dev, ep0_mps, vc_if, pu, ctrl.selector);
+            let want = match ctrl.override_val {
                 Some(v) => Some(v),
-                None => try_get_def_u16(dev, ep0_mps, vc_if, pu, selector),
+                None => try_get_def_u16(dev, ep0_mps, vc_if, pu, ctrl.selector),
             };
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
-                    let ok = try_set_cur_u16(dev, ep0_mps, vc_if, pu, selector, d);
+                    let ok = try_set_cur_u16(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
                     log::info!(
-                        "UVC: PU.{name} {c} -> {d} ({want_src}, {})",
+                        "UVC: PU.{} {c} -> {d} ({want_src}, {})",
+                        ctrl.name,
                         if ok { "ok" } else { "set 失败" }
                     );
                 }
-                (None, _) => log::warn!("UVC: PU.{name} GET_CUR 失败"),
+                (None, _) => log::warn!("UVC: PU.{} GET_CUR 失败", ctrl.name),
                 _ => {}
             }
         }
@@ -811,15 +809,15 @@ pub fn uvc_init_camera_controls(
         //   D0=Brightness D1=Contrast D2=Hue D3=Saturation D4=Sharpness
         //   D5=Gamma D6=WB Temp D8=Backlight D9=Gain D10=PowerLineFreq
         //   D11=Hue Auto D12=WB Temp Auto
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 0, PU_BRIGHTNESS_CONTROL, 2, "Brightness", tune.brightness);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 1, PU_CONTRAST_CONTROL, 2, "Contrast", tune.contrast);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 2, PU_HUE_CONTROL, 2, "Hue", tune.hue);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 3, PU_SATURATION_CONTROL, 2, "Saturation", tune.saturation);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 4, PU_SHARPNESS_CONTROL, 2, "Sharpness", tune.sharpness);
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 0, selector: PU_BRIGHTNESS_CONTROL, width: 2, name: "Brightness", override_val: tune.brightness });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 1, selector: PU_CONTRAST_CONTROL, width: 2, name: "Contrast", override_val: tune.contrast });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 2, selector: PU_HUE_CONTROL, width: 2, name: "Hue", override_val: tune.hue });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 3, selector: PU_SATURATION_CONTROL, width: 2, name: "Saturation", override_val: tune.saturation });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 4, selector: PU_SHARPNESS_CONTROL, width: 2, name: "Sharpness", override_val: tune.sharpness });
         // PU_GAMMA selector = 0x09
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 5, 0x09, 2, "Gamma", tune.gamma);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 8, PU_BACKLIGHT_COMPENSATION, 2, "Backlight", tune.backlight);
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, 9, PU_GAIN_CONTROL, 2, "Gain", tune.gain);
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 5, selector: 0x09, width: 2, name: "Gamma", override_val: tune.gamma });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 8, selector: PU_BACKLIGHT_COMPENSATION, width: 2, name: "Backlight", override_val: tune.backlight });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 9, selector: PU_GAIN_CONTROL, width: 2, name: "Gain", override_val: tune.gain });
 
         // ② 白平衡
         match tune.white_balance_temp_k {
@@ -835,11 +833,10 @@ pub fn uvc_init_camera_controls(
             _ => {
                 if (bm & (1 << 12)) != 0 {
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 0);
-                    if (bm & (1 << 6)) != 0 {
-                        if let Some(d) = try_get_def_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL) {
+                    if (bm & (1 << 6)) != 0
+                        && let Some(d) = try_get_def_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL) {
                             let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, d);
                         }
-                    }
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 1);
                     let cur_t = try_get_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(0);
                     log::info!("UVC: PU.WB = Auto (cur {cur_t}K)");
@@ -1071,6 +1068,17 @@ pub fn reset_frame_continuity() {
     LAST_EOF_FID.store(0xFF, core::sync::atomic::Ordering::Relaxed);
 }
 
+/// UVC 抓帧过程中单包解析上下文（`Capturing` 状态）。
+struct CapturingPacket<'a> {
+    pkt: &'a [u8],
+    payload_len: usize,
+    eof: bool,
+    cur_fid: u8,
+    info: u8,
+    jpeg_len: &'a mut usize,
+    jpeg_cap: usize,
+}
+
 fn process_packet(
     pkt: &[u8],
     state: &mut FrameState,
@@ -1096,84 +1104,79 @@ fn process_packet(
                 None => *last_fid = Some(cur_fid),
                 Some(prev) if prev != cur_fid => {
                     *state = FrameState::Capturing { frame_fid: cur_fid, saw_data: false };
-                    return process_packet_capturing(pkt, payload_len, eof, cur_fid, info, state, jpeg_len, jpeg_cap);
+                    let p = CapturingPacket { pkt, payload_len, eof, cur_fid, info, jpeg_len, jpeg_cap };
+                    return process_packet_capturing(state, p);
                 }
                 _ => {}
             }
             Ok(false)
         }
-        FrameState::Capturing { .. } => process_packet_capturing(pkt, payload_len, eof, cur_fid, info, state, jpeg_len, jpeg_cap),
+        FrameState::Capturing { .. } => {
+            let p = CapturingPacket { pkt, payload_len, eof, cur_fid, info, jpeg_len, jpeg_cap };
+            process_packet_capturing(state, p)
+        }
     }
 }
 
-fn process_packet_capturing(
-    pkt: &[u8],
-    payload_len: usize,
-    eof: bool,
-    cur_fid: u8,
-    info: u8,
-    state: &mut FrameState,
-    jpeg_len: &mut usize,
-    jpeg_cap: usize,
-) -> UsbResult<bool> {
+fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> UsbResult<bool> {
     let FrameState::Capturing { frame_fid, saw_data } = state else {
         return Ok(false);
     };
-    if cur_fid != *frame_fid {
+    if p.cur_fid != *frame_fid {
         // 检查累积 JPEG 末尾是否真带 EOI(`ff d9`)：0c45:64ab 等廉价 webcam 会在正常帧之间
         // 插入 "元数据帧"——带 SOI 但**无** EOI，且 FID 也会翻转。仅看 saw_data 会让这种
         // 残帧（典型 1008 字节）被误判为帧结束，上抛后被 caller 校验失败、必须重试。
         // 这里要求 EOI 真实存在；不在则丢弃累积、用新 FID 重新开始帧，把当前 packet 当作
         // 新帧首包正常累积，**不**回调 caller 也不浪费一次完整的 capture。
-        let has_eoi = *jpeg_len >= 2
-            && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len - 2, 2)
+        let has_eoi = *p.jpeg_len >= 2
+            && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
                 .map(|t| t[0] == 0xff && t[1] == 0xd9)
                 .unwrap_or(false);
         if FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
             log::info!("UVC-trace FID-flip uf={} frame_fid={} new_fid={} saw_data={} jpeg_len={} has_eoi={}",
-                dwc2_ep0::current_uframe(), *frame_fid, cur_fid, *saw_data, *jpeg_len, has_eoi);
+                dwc2_ep0::current_uframe(), *frame_fid, p.cur_fid, *saw_data, *p.jpeg_len, has_eoi);
         }
         if *saw_data && has_eoi {
             return Ok(true);
         }
         // 残帧（无 EOI）：丢弃，把当前 packet 作为新帧的首包，state 切到新 FID。
-        *jpeg_len = 0;
-        *frame_fid = cur_fid;
+        *p.jpeg_len = 0;
+        *frame_fid = p.cur_fid;
         *saw_data = false;
     }
-    if payload_len > 0 {
-        let hlen = pkt[0] as usize;
-        let payload = &pkt[hlen..];
+    if p.payload_len > 0 {
+        let hlen = p.pkt[0] as usize;
+        let payload = &p.pkt[hlen..];
         // 第一次累积时校验 payload 必须以 SOI(`ff d8`) 开头：摄像头在帧间会插入 padding
         // packet（同一 FID 但 payload 不带 SOI），如果就这样累积下去会得到"首字节非 ff d8"
         // 的截断帧。这里跳过该 packet，等同 FID 内下一个真 SOI 开头的 packet 再开始累积。
         if !*saw_data && (payload.len() < 2 || payload[0] != 0xff || payload[1] != 0xd8) {
             return Ok(false);
         }
-        if jpeg_len.checked_add(payload.len()).unwrap_or(usize::MAX) > jpeg_cap {
+        if p.jpeg_len.checked_add(payload.len()).unwrap_or(usize::MAX) > p.jpeg_cap {
             return Err(UsbError::Hardware("video assemble overflow"));
         }
-        dwc2_ep0::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
-        *jpeg_len += payload.len();
+        dwc2_ep0::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len, payload)?;
+        *p.jpeg_len += payload.len();
         *saw_data = true;
     }
     // EOF 时同样校验 EOI(`ff d9`)：0c45:64ab 的 metadata 帧带合法 EOF 标记但 jpeg 仅
     // 有 SOI，没有 EOI（典型 1008 字节）。仅看 EOF flag 会让这种残帧被上抛。
-    let has_eoi_now = *jpeg_len >= 2
-        && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len - 2, 2)
+    let has_eoi_now = *p.jpeg_len >= 2
+        && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
             .map(|t| t[0] == 0xff && t[1] == 0xd9)
             .unwrap_or(false);
-    let frame_done = eof && *saw_data && has_eoi_now;
-    if eof && FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
+    let frame_done = p.eof && *saw_data && has_eoi_now;
+    if p.eof && FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
         log::info!("UVC-trace EOF uf={} fid={} info={:#04x} payload={} saw_data={} jpeg_len={} has_eoi={} done={}",
-            dwc2_ep0::current_uframe(), cur_fid, info, payload_len, *saw_data, *jpeg_len, has_eoi_now, frame_done);
+            dwc2_ep0::current_uframe(), p.cur_fid, p.info, p.payload_len, *saw_data, *p.jpeg_len, has_eoi_now, frame_done);
     }
-    if eof && *saw_data && !has_eoi_now {
+    if p.eof && *saw_data && !has_eoi_now {
         // 残帧（带 EOF 但无 EOI）：丢弃累积，回到 WaitFirstSwitch 等下一次 FID 翻转。
         // 不返回 false 让 caller 误以为"还在累积"——直接置 state 回 wait 让下一帧从干净状态开始。
-        *jpeg_len = 0;
+        *p.jpeg_len = 0;
         *saw_data = false;
-        *state = FrameState::WaitFirstSwitch { last_fid: Some(cur_fid) };
+        *state = FrameState::WaitFirstSwitch { last_fid: Some(p.cur_fid) };
         return Ok(false);
     }
     Ok(frame_done)

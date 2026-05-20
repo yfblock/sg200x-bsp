@@ -11,7 +11,6 @@ use crate::usb::error::{UsbError, UsbResult};
 use crate::utils::cache;
 use crate::usb;
 use crate::usb::setup;
-use super::mmio;
 use super::regs::{Dwc2HostChannel, Dwc2Regs, HCCHAR, HCINT, HCTSIZ, HFNUM};
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
@@ -20,12 +19,12 @@ pub type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
+    usb::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 #[inline]
 fn channel(ch: u32) -> &'static Dwc2HostChannel {
-    mmio::dwc2_channel(ch).expect("invalid DWC2 host channel index")
+    usb::dwc2_channel(ch).expect("invalid DWC2 host channel index")
 }
 
 /// EP0 控制传输固定用通道 0。
@@ -670,7 +669,7 @@ fn pktcnt_for(mps: u32, nbytes: u32) -> u32 {
     if mps == 0 {
         return 1;
     }
-    (nbytes + mps - 1) / mps
+    nbytes.div_ceil(mps)
 }
 
 /// Bulk OUT：将 `data` 写入内部 DMA 窗口后，经主机通道 1 发出。

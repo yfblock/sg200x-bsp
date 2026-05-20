@@ -313,7 +313,7 @@ impl UsbDeviceClass for CdcAcm {
             if xfercompl || bbl {
                 self.out_armed = false;
                 let original = BULK_BUF_SIZE as u32;
-                let r = crate::usb::host::dwc2::mmio::dwc2_regs().unwrap();
+                let r = crate::usb::dwc2_regs().unwrap();
                 let residual = r.doep[BULK_DATA_EP as usize].doeptsiz.get() & 0x7ffff;
                 let mut actual = original.saturating_sub(residual) as usize;
                 if bbl && actual == 0 {
