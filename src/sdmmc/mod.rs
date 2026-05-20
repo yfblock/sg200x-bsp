@@ -618,7 +618,7 @@ impl Sdmmc {
     /// - `data`: 用于存储读取数据的缓冲区，必须为 512 字节
     fn read_buff(&self, data: &mut [u8]) -> Result<(), CmdError> {
         // assert!(data.len() == BLOCK_SIZE);
-        assert!(data.len() % BLOCK_SIZE == 0);
+        assert!(data.len().is_multiple_of(BLOCK_SIZE));
 
         for block_buf in data.chunks_exact_mut(BLOCK_SIZE) {
             // 等待缓冲区读就绪

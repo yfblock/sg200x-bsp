@@ -3,7 +3,8 @@
 //!
 //! # 使用顺序（主机）
 //!
-//! 1. [`set_dwc2_base_virt`] 指向控制器 MMIO；若 VA≠PA，再注册 [`set_usb_dma_to_phys_fn`]。
+//! 1. [`set_dwc2_base_virt`] 指向控制器 MMIO；启用 `cv182x-host` 时再 [`set_cv182x_phy_base_virt`]。
+//!    若 VA≠PA，再注册 [`set_usb_dma_to_phys_fn`]。
 //! 2. 板级实现 [`log`](https://docs.rs/log) 的 `Logger` trait（例如接到 `println!` / 串口）。
 //! 3. 调 [`host::enumerate_root_port`] 或自行组合 `host::dwc2` + `host::topology`。
 //!
@@ -15,11 +16,18 @@
 //! # 板级配置
 //!
 //! - [`set_dwc2_base_virt`] / [`dwc2_base_virt`]：DWC2 MMIO 虚拟基址。
+//! - [`dwc2_regs`] / [`dwc2_channel`]：虚拟基址 → `Dwc2Regs` / `Dwc2HostChannel` 视图。
+//! - [`set_cv182x_phy_base_virt`] / [`cv182x_phy_base_virt`]（`cv182x-host`）：CV182x USB2 PHY MMIO。
+//! - [`cv182x_phy_regs`]（`cv182x-host`）：PHY 寄存器视图。
 //! - [`set_usb_dma_to_phys_fn`] / [`usb_dma_phys_for`]：EP0 `HCDMA` 用的 VA→PA。
 //!
 //! DMA 与 CPU 视图一致性由 [`crate::utils::cache`] 的 clean / invalidate 辅助完成。
 
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::usb::host::dwc2::regs::{Dwc2HostChannel, Dwc2Regs, DWC2_MAX_HOST_CHANNELS};
+#[cfg(feature = "cv182x-host")]
+use crate::usb::host::dwc2::regs::Cv182xUsb2Phy;
 
 pub mod error;
 pub mod setup;
@@ -31,13 +39,14 @@ pub mod device;
 
 pub use error::{UsbError, UsbResult};
 
-// 由板级在首次访问 USB 前一次性写入；多核下应在单核初始化阶段完成。
+// ---------------------------------------------------------------------------
+// 板级 MMIO 基址（首次访问 USB 前一次性写入；多核下应在单核初始化阶段完成）
+// ---------------------------------------------------------------------------
+
 static DWC2_BASE_VIRT: AtomicUsize = AtomicUsize::new(0);
 
-/// 将 EP0 / 通道 DMA 缓冲区的 **虚拟地址** 转为写入 `HCDMA` 的地址（通常为物理地址）。
-pub type UsbDmaToPhysFn = fn(*const u8) -> u32;
-
-static USB_DMA_TO_PHYS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "cv182x-host")]
+static CV182X_PHY_BASE_VIRT: AtomicUsize = AtomicUsize::new(0);
 
 /// 设置 DWC2 控制器的 MMIO **虚拟**基址（通常为 `phys_to_virt([`crate::soc::DWC2_BASE`])`）。
 ///
@@ -48,11 +57,81 @@ pub fn set_dwc2_base_virt(addr: usize) {
     DWC2_BASE_VIRT.store(addr, Ordering::SeqCst);
 }
 
-/// 返回当前设置的 MMIO 虚拟基址；未调用 [`set_dwc2_base_virt`] 时为 **0**。
+/// 返回当前设置的 DWC2 MMIO 虚拟基址；未调用 [`set_dwc2_base_virt`] 时为 **0**。
 #[inline]
 pub fn dwc2_base_virt() -> usize {
     DWC2_BASE_VIRT.load(Ordering::SeqCst)
 }
+
+/// 设置 CV182x 片内 USB2 PHY 的 MMIO **虚拟**基址（通常为
+/// `phys_to_virt([`crate::soc::CV182X_USB2_PHY_BASE`])`）。
+#[cfg(feature = "cv182x-host")]
+#[inline]
+pub fn set_cv182x_phy_base_virt(addr: usize) {
+    CV182X_PHY_BASE_VIRT.store(addr, Ordering::SeqCst);
+}
+
+/// 返回当前设置的 CV182x USB2 PHY MMIO 虚拟基址；未调用 [`set_cv182x_phy_base_virt`] 时为 **0**。
+#[cfg(feature = "cv182x-host")]
+#[inline]
+pub fn cv182x_phy_base_virt() -> usize {
+    CV182X_PHY_BASE_VIRT.load(Ordering::SeqCst)
+}
+
+// DWC2 寄存器一律走 [`host::dwc2::regs`] 的 `tock-registers` 访问器。
+
+/// 取 DWC2 全局寄存器视图。
+///
+/// # 返回值
+/// 未设置 MMIO 基址（或为 0）时返回 `None`。
+#[inline]
+pub fn dwc2_regs() -> Option<&'static Dwc2Regs> {
+    let base = dwc2_base_virt();
+    if base == 0 {
+        return None;
+    }
+    Some(unsafe { &*(base as *const Dwc2Regs) })
+}
+
+/// 取第 `ch` 号主机通道寄存器块。
+///
+/// # 参数
+/// - `ch`：主机通道索引；本栈约定 **0** 为 EP0 控制、**1** 为 Bulk/Isoch。
+///
+/// # 返回值
+/// `ch` 超出 IP 支持数量或基址未设置时返回 `None`。
+#[inline]
+pub fn dwc2_channel(ch: u32) -> Option<&'static Dwc2HostChannel> {
+    let regs = dwc2_regs()?;
+    let idx = ch as usize;
+    if idx >= DWC2_MAX_HOST_CHANNELS {
+        return None;
+    }
+    Some(&regs.hc[idx])
+}
+
+/// 取 CV182x 片内 USB2 PHY 寄存器视图。
+///
+/// # 返回值
+/// 未设置 MMIO 基址（或为 0）时返回 `None`。
+#[cfg(feature = "cv182x-host")]
+#[inline]
+pub fn cv182x_phy_regs() -> Option<&'static Cv182xUsb2Phy> {
+    let base = cv182x_phy_base_virt();
+    if base == 0 {
+        return None;
+    }
+    Some(unsafe { &*(base as *const Cv182xUsb2Phy) })
+}
+
+// ---------------------------------------------------------------------------
+// DMA 地址转换
+// ---------------------------------------------------------------------------
+
+/// 将 EP0 / 通道 DMA 缓冲区的 **虚拟地址** 转为写入 `HCDMA` 的地址（通常为物理地址）。
+pub type UsbDmaToPhysFn = fn(*const u8) -> u32;
+
+static USB_DMA_TO_PHYS: AtomicUsize = AtomicUsize::new(0);
 
 /// 注册 `HCDMA` 用的 **虚拟地址 → DMA 总线地址** 转换函数。
 ///

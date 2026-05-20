@@ -205,7 +205,7 @@ impl MscDevice {
         if bytes == 0 {
             1 // ZLP 也算一个 packet
         } else {
-            ((bytes as u32) + mps - 1) / mps
+            (bytes as u32).div_ceil(mps)
         }
     }
 

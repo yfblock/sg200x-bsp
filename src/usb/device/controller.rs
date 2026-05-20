@@ -8,7 +8,6 @@
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::host::dwc2::mmio;
 use crate::usb::host::dwc2::regs::{
     Dwc2Regs, DCFG, DCTL, DEPMSK, DIEPCTL, DOEPCTL, GAHBCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTSTS,
     GRSTCTL, GUSBCFG,
@@ -22,7 +21,7 @@ fn base() -> usize {
 
 #[inline]
 fn regs() -> &'static Dwc2Regs {
-    mmio::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
+    usb::dwc2_regs().expect("DWC2 base not set (call set_dwc2_base_virt)")
 }
 
 #[inline]

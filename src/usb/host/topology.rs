@@ -196,7 +196,7 @@ fn parse_msc_interface_endpoints(
         return Err(UsbError::Protocol("not a configuration descriptor"));
     }
     let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
-    if total < 9 || total > 512 {
+    if !(9..=512).contains(&total) {
         return Err(UsbError::Protocol("bad cfg total length"));
     }
 

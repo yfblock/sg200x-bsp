@@ -24,7 +24,7 @@ pub const DMA_MAX_REQUESTS: usize = 16;
 pub const DMA_DEFAULT_BLOCK_SIZE: u32 = 1024;
 
 /// DMA transfer direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DmaDirection {
     /// Memory to Memory
     MemToMem,
@@ -33,15 +33,17 @@ pub enum DmaDirection {
     /// Device (Peripheral) to Memory
     DevToMem,
     /// No direction set
+    #[default]
     None,
 }
 
 /// DMA transfer width
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum DmaWidth {
     Width8 = 0,
     Width16 = 1,
+    #[default]
     Width32 = 2,
     Width64 = 3,
     Width128 = 4,
@@ -178,17 +180,7 @@ pub struct DmaSlaveConfig {
     pub device_fc: bool,
 }
 
-impl Default for DmaDirection {
-    fn default() -> Self {
-        DmaDirection::None
-    }
-}
 
-impl Default for DmaWidth {
-    fn default() -> Self {
-        DmaWidth::Width32
-    }
-}
 
 /// DMA channel state
 pub struct DmaChannel {
@@ -778,8 +770,8 @@ pub fn prepare_memcpy_lli(
         lli_array[lli_count - 1].llp = 0;
 
         let stride = core::mem::size_of::<DmaLli>() as u64;
-        for i in 0..lli_count - 1 {
-            lli_array[i].llp = lli_array_phys + (i as u64 + 1) * stride;
+        for (i, lli) in lli_array.iter_mut().enumerate().take(lli_count - 1) {
+            lli.llp = lli_array_phys + (i as u64 + 1) * stride;
         }
     }
 
