@@ -3,7 +3,7 @@
 //! 子模块组织：
 //! - [`dwc2`]：Synopsys DWC2 控制器（寄存器、bring-up、EP0/Bulk/Isoch 通道）。
 //! - [`enumerate`]：根口连接检查 + 委托 [`topology`] 做递归扫描。
-//! - [`topology`]：Hub 描述符解析与端口递归枚举（标记 MSC / UVC 候选）。
+//! - [`topology`]：总线递归枚举（标记 MSC / UVC 候选；Hub 类协议见 [`crate::usb::class::hub`]）。
 
 pub mod dwc2;
 pub mod enumerate;

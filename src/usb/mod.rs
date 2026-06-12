@@ -28,12 +28,14 @@ use crate::usb::host::dwc2::regs::{Dwc2HostChannel, Dwc2Regs, DWC2_MAX_HOST_CHAN
 #[cfg(feature = "cv182x-host")]
 use crate::usb::host::dwc2::regs::Cv182xUsb2Phy;
 
+pub mod class_codes;
 pub mod error;
 pub mod setup;
 
 pub mod host;
 pub mod class;
 
+pub use class_codes::UsbClass;
 pub use error::{UsbError, UsbResult};
 
 // ---------------------------------------------------------------------------

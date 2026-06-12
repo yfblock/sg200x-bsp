@@ -1,5 +1,6 @@
-//! EP0 控制传输与枚举/Hub 便捷函数（通道 0）。
+//! EP0 控制传输与标准枚举便捷函数（通道 0）。
 
+use crate::usb::UsbClass;
 use crate::usb::error::{UsbError, UsbResult};
 use crate::utils::{cache, spin_delay};
 use crate::usb::setup;
@@ -12,11 +13,6 @@ use super::regs::{HCCHAR, HCTSIZ};
 /// `SET_ADDRESS` 后粗延时，满足 USB 2.0 在下一事务前使用新地址的要求。
 pub fn usb_post_set_address_delay() {
     spin_delay(20_000_000);
-}
-
-/// Hub 下游端口 `PORT_RESET` 后给设备恢复时间（粗粒度忙等）。
-pub fn usb_post_hub_port_reset_delay() {
-    spin_delay(30_000_000);
 }
 
 #[inline]
@@ -122,7 +118,7 @@ pub fn get_configuration(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
 ///
 /// # 返回值
 /// `(vid, pid, ep0_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
-pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
+pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, UsbClass)> {
     unsafe {
         let wlen: u16 = 18;
         let setup_pkt = setup::get_descriptor_device(wlen);
@@ -154,7 +150,7 @@ pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         let vid = u16::from_le_bytes([sl[8], sl[9]]);
         let pid = u16::from_le_bytes([sl[10], sl[11]]);
         let ep0_mps = normalize_ep0_mps(sl[7]);
-        let b_device_class = sl[4];
+        let dev_class = UsbClass::from_raw(sl[4]);
 
         hc = hcchar_build(0, 0, 64, HCCHAR::EPTYPE::Control, false, 0);
         channel::ch_xfer(
@@ -164,18 +160,8 @@ pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
             OFF_EP0 as u32,
         )?;
 
-        Ok((vid, pid, ep0_mps, b_device_class))
+        Ok((vid, pid, ep0_mps, dev_class))
     }
-}
-
-/// 对 **已寻址** Hub 发送 `SET_PORT_FEATURE`（无数据阶段）。
-pub fn hub_set_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
-    ep0_control_write_no_data(dev, setup::hub_set_port_feature(port, feature), ep0_mps)
-}
-
-/// 对 **已寻址** Hub 发送 `CLEAR_PORT_FEATURE`（清除 `C_PORT_*` 等变化位）。
-pub fn hub_clear_port_feature(dev: u32, port: u16, feature: u16, ep0_mps: u32) -> UsbResult<()> {
-    ep0_control_write_no_data(dev, setup::hub_clear_port_feature(port, feature), ep0_mps)
 }
 
 /// 控制传输：SETUP + 若干 IN 数据包（DATA1/DATA0 交替）+ STATUS OUT（ZLP，DATA1）。

@@ -69,13 +69,14 @@ pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbRe
         if st.is_set(HCINT::AHBERR) {
             return Err(UsbError::Hardware("AHBERR on isoch"));
         }
-        if st.is_set(HCINT::FRMOVRN)
-            || st.is_set(HCINT::XACTERR)
-            || st.is_set(HCINT::BBLERR)
-            || st.is_set(HCINT::DATATGLERR)
-            || st.is_set(HCINT::NYET)
-            || st.is_set(HCINT::NAK)
-        {
+        if st.any_matching_bits_set(
+            HCINT::FRMOVRN::SET
+                + HCINT::XACTERR::SET
+                + HCINT::BBLERR::SET
+                + HCINT::DATATGLERR::SET
+                + HCINT::NYET::SET
+                + HCINT::NAK::SET,
+        ) {
             return Ok(0);
         }
         if !st.is_set(HCINT::XFERCOMPL) {
@@ -144,7 +145,7 @@ where
             total_uframes += 1;
 
             if consecutive_empty > 0 {
-                spin_delay(core::cmp::min(consecutive_empty * 2, 32));
+                spin_delay(32.min(consecutive_empty * 2));
             }
 
             c.hcint.set(HCINT_ALL_W1C);
@@ -180,16 +181,14 @@ where
                 } else {
                     consecutive_empty += 1;
                 }
-            } else if st.is_set(HCINT::STALL) || st.is_set(HCINT::AHBERR) {
-                return Err(if st.is_set(HCINT::STALL) {
-                    UsbError::Stall
-                } else {
-                    UsbError::Hardware("AHBERR on isoch")
-                });
+            } else if st.is_set(HCINT::STALL) {
+                return Err(UsbError::Stall);
+            } else if st.is_set(HCINT::AHBERR) {
+                return Err(UsbError::Hardware("AHBERR on isoch"));
             } else {
                 consecutive_empty += 1;
                 if consecutive_empty > 0 {
-                    spin_delay(core::cmp::min(consecutive_empty * 2, 32));
+                    spin_delay(32.min(consecutive_empty * 2));
                 }
             }
         }
@@ -242,11 +241,12 @@ pub fn isoch_in(dev: u32, ep: u32, mps: u32, len: usize, dma_off: usize) -> UsbR
         if st.is_set(HCINT::STALL) {
             return Err(UsbError::Stall);
         }
-        if st.is_set(HCINT::FRMOVRN)
-            || st.is_set(HCINT::XACTERR)
-            || st.is_set(HCINT::BBLERR)
-            || st.is_set(HCINT::NYET)
-        {
+        if st.any_matching_bits_set(
+            HCINT::FRMOVRN::SET
+                + HCINT::XACTERR::SET
+                + HCINT::BBLERR::SET
+                + HCINT::NYET::SET,
+        ) {
             return Ok(0);
         }
         if !st.is_set(HCINT::XFERCOMPL) {

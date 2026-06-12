@@ -432,27 +432,351 @@ register_bitfields![u32,
         DBNCE_FLTR_BYPASS OFFSET(15) NUMBITS(1) [],
     ],
 
+    /// Global Hardware Configuration 1
+    ///
+    /// 用户硬件配置 1（只读，综合后固定），偏移 `0x044`。
+    ///
+    /// 每端点占 2 bit 表示设备模式方向能力（EP0 恒为 BIDIR）；主机模式可读作诊断，
+    /// Linux `dev_ep_dirs` 即本寄存器原值。
+    pub GHWCFG1 [
+        /// Endpoint 0 Direction
+        ///
+        /// 设备模式端点 0 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP0_DIR OFFSET(0) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 1 Direction
+        ///
+        /// 设备模式端点 1 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP1_DIR OFFSET(2) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 2 Direction
+        ///
+        /// 设备模式端点 2 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP2_DIR OFFSET(4) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 3 Direction
+        ///
+        /// 设备模式端点 3 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP3_DIR OFFSET(6) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 4 Direction
+        ///
+        /// 设备模式端点 4 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP4_DIR OFFSET(8) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 5 Direction
+        ///
+        /// 设备模式端点 5 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP5_DIR OFFSET(10) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 6 Direction
+        ///
+        /// 设备模式端点 6 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP6_DIR OFFSET(12) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 7 Direction
+        ///
+        /// 设备模式端点 7 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP7_DIR OFFSET(14) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 8 Direction
+        ///
+        /// 设备模式端点 8 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP8_DIR OFFSET(16) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 9 Direction
+        ///
+        /// 设备模式端点 9 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP9_DIR OFFSET(18) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 10 Direction
+        ///
+        /// 设备模式端点 10 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP10_DIR OFFSET(20) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 11 Direction
+        ///
+        /// 设备模式端点 11 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP11_DIR OFFSET(22) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 12 Direction
+        ///
+        /// 设备模式端点 12 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP12_DIR OFFSET(24) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 13 Direction
+        ///
+        /// 设备模式端点 13 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP13_DIR OFFSET(26) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 14 Direction
+        ///
+        /// 设备模式端点 14 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP14_DIR OFFSET(28) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+        /// Endpoint 15 Direction
+        ///
+        /// 设备模式端点 15 方向，2 bit/端点，RO。00=BIDIR，01=IN，10=OUT，11=保留。
+        EP15_DIR OFFSET(30) NUMBITS(2) [
+            /// Bidirectional   双向
+            Bidir = 0,
+            /// IN endpoint   仅 IN
+            In = 1,
+            /// OUT endpoint   仅 OUT
+            Out = 2,
+        ],
+    ],
+
     /// Global Hardware Configuration 2
     ///
-    /// 硬件能力配置 2（只读，上电后固定），偏移 `0x048`。
+    /// 用户硬件配置 2（只读，综合后固定），偏移 `0x048`。
+    ///
+    /// 核心架构、PHY 类型、主机通道数、FIFO/队列深度等能力；`dwc2_host_init` 依
+    /// `ARCH` 决定是否置 `GAHBCFG.DMA_EN`，依 `NUM_HOST_CHAN` 确定可用 HC 数。
     pub GHWCFG2 [
+        /// OTG Operation Mode
+        ///
+        /// OTG 工作模式能力，RO。
+        OP_MODE OFFSET(0) NUMBITS(3) [
+            /// HNP/SRP Capable OTG   支持 HNP+SRP
+            HnpSrpCapable = 0,
+            /// SRP-Only Capable OTG   仅 SRP
+            SrpOnlyCapable = 1,
+            /// No HNP/SRP Capable OTG   无 HNP/SRP
+            NoHnpSrpCapable = 2,
+            /// SRP-Capable Device   设备 + SRP
+            SrpCapableDevice = 3,
+            /// No SRP-Capable Device   设备无 SRP
+            NoSrpCapableDevice = 4,
+            /// SRP-Capable Host   主机 + SRP
+            SrpCapableHost = 5,
+            /// No SRP-Capable Host   主机无 SRP
+            NoSrpCapableHost = 6,
+            /// Undefined   未定义
+            Undefined = 7,
+        ],
         /// Architecture
         ///
-        /// 0=Slave，1=External DMA，2=Internal DMA，RO。
-        ARCH OFFSET(3) NUMBITS(2) [],
+        /// 数据通路架构，RO；2=内部 DMA 时须 `GAHBCFG.DMA_EN=1`。
+        ARCH OFFSET(3) NUMBITS(2) [
+            /// Slave-Only   仅 Slave
+            SlaveOnly = 0,
+            /// External DMA   外部 DMA
+            ExternalDma = 1,
+            /// Internal DMA   内部 DMA
+            InternalDma = 2,
+        ],
+        /// Point-to-Point
+        ///
+        /// 1=点对点（无 Hub），RO。
+        POINT2POINT OFFSET(5) NUMBITS(1) [],
+        /// High-Speed PHY Type
+        ///
+        /// HS PHY 类型，RO。
+        HS_PHY_TYPE OFFSET(6) NUMBITS(2) [
+            /// Not Supported   不支持
+            NotSupported = 0,
+            /// UTMI   UTMI
+            Utmi = 1,
+            /// ULPI   ULPI
+            Ulpi = 2,
+            /// UTMI+ULPI   UTMI 与 ULPI
+            UtmiUlpi = 3,
+        ],
+        /// Full-Speed PHY Type
+        ///
+        /// FS PHY 类型，RO。
+        FS_PHY_TYPE OFFSET(8) NUMBITS(2) [
+            /// Not Supported   不支持
+            NotSupported = 0,
+            /// Dedicated FS PHY   独立 FS PHY
+            Dedicated = 1,
+            /// Shared UTMI   与 HS 共享 UTMI
+            SharedUtmi = 2,
+            /// Shared ULPI   与 HS 共享 ULPI
+            SharedUlpi = 3,
+        ],
+        /// Number of Device Endpoints
+        ///
+        /// 除 EP0 外的设备 IN/OUT 端点个数，RO（非减一编码）。
+        NUM_DEV_EP OFFSET(10) NUMBITS(4) [],
         /// Number of Host Channels
         ///
-        /// 主机通道数减一编码，实际 = 值+1，RO。
+        /// 主机通道数减一，实际 = 值+1，RO。
         NUM_HOST_CHAN OFFSET(14) NUMBITS(4) [],
+        /// Periodic Endpoint Supported
+        ///
+        /// 1=设备模式支持周期端点，RO。
+        PERIO_EP_SUPPORTED OFFSET(18) NUMBITS(1) [],
+        /// Dynamic FIFO Sizing
+        ///
+        /// 1=支持动态 FIFO（`GDFIFOCFG`），RO。
+        DYNAMIC_FIFO OFFSET(19) NUMBITS(1) [],
+        /// Multi-Processor Interrupt
+        ///
+        /// 1=多处理器中断扩展，RO。
+        MULTI_PROC_INT OFFSET(20) NUMBITS(1) [],
+        /// Non-Periodic Transmit Queue Depth
+        ///
+        /// 非周期 TX 请求队列深度编码，实际深度 = 值×2，RO。
+        NONPERIO_TX_Q_DEPTH OFFSET(22) NUMBITS(2) [],
+        /// Host Periodic Transmit Queue Depth
+        ///
+        /// 主机周期 TX 请求队列深度编码，实际深度 = 值×2，RO。
+        HOST_PERIO_TX_Q_DEPTH OFFSET(24) NUMBITS(2) [],
+        /// Device Token Queue Depth
+        ///
+        /// 设备模式令牌队列深度，RO。
+        DEV_TOKEN_Q_DEPTH OFFSET(26) NUMBITS(5) [],
+        /// OTG IC-USB Enable
+        ///
+        /// 1=支持 IC-USB，RO。
+        OTG_ENABLE_IC_USB OFFSET(31) NUMBITS(1) [],
     ],
 
     /// Global Hardware Configuration 3
     ///
-    /// 硬件能力配置 3（DFIFO 深度等），偏移 `0x04C`。
+    /// 用户硬件配置 3（只读，综合后固定），偏移 `0x04C`。
+    ///
+    /// HCTSIZ 计数器位宽、可选特性标志与 DFIFO 总深度（32-bit 字）。
     pub GHWCFG3 [
+        /// Transfer Size Counter Width
+        ///
+        /// `HCTSIZ.XFERSIZE` 位宽减 11 的编码；最大传输 = `(1<<(值+11))-1` 字节，RO。
+        XFER_SIZE_CNTR_WIDTH OFFSET(0) NUMBITS(4) [],
+        /// Packet Size Counter Width
+        ///
+        /// `HCTSIZ.PKTCNT` 位宽减 4 的编码；最大包数 = `(1<<(值+4))-1`，RO。
+        PACKET_SIZE_CNTR_WIDTH OFFSET(4) NUMBITS(3) [],
+        /// OTG Function
+        ///
+        /// 1=集成 OTG 功能，RO。
+        OTG_FUNC OFFSET(7) NUMBITS(1) [],
+        /// I2C Interface
+        ///
+        /// 1=集成 I2C 从接口，RO。
+        I2C OFFSET(8) NUMBITS(1) [],
+        /// Vendor Control Interface
+        ///
+        /// 1=厂商控制接口，RO。
+        VENDOR_CTRL_IF OFFSET(9) NUMBITS(1) [],
+        /// Optional Features
+        ///
+        /// 1=支持可选特性集，RO。
+        OPTIONAL_FEATURES OFFSET(10) NUMBITS(1) [],
+        /// Synchronous Reset Type
+        ///
+        /// 同步复位类型，RO。
+        SYNCH_RESET_TYPE OFFSET(11) NUMBITS(1) [],
+        /// ADP Support
+        ///
+        /// 1=支持 ADP，RO。
+        ADP_SUPP OFFSET(12) NUMBITS(1) [],
+        /// OTG HSIC Enable
+        ///
+        /// 1=支持 HSIC，RO。
+        OTG_ENABLE_HSIC OFFSET(13) NUMBITS(1) [],
+        /// Battery Charging Support
+        ///
+        /// 1=支持 BC，RO。
+        BC_SUPPORT OFFSET(14) NUMBITS(1) [],
+        /// OTG LPM Enable
+        ///
+        /// 1=支持 USB 2.0 LPM，RO。
+        OTG_LPM_EN OFFSET(15) NUMBITS(1) [],
         /// Data FIFO Depth
         ///
-        /// 数据 FIFO 总深度，32-bit 字，RO。
+        /// 可分配 DFIFO 总深度，32-bit 字，RO；与 `GDFIFOCFG` 配合规划 RX/TX FIFO。
         DFIFO_DEPTH OFFSET(16) NUMBITS(16) [],
     ],
 
@@ -1414,15 +1738,15 @@ register_structs! {
         (0x040 => pub gsnpsid: ReadOnly<u32>),
         /// Hardware Configuration 1
         ///
-        /// 硬件配置 1（端点方向能力位图）。
-        (0x044 => pub ghwcfg1: ReadOnly<u32>),
+        /// 用户硬件配置 1：16 个设备端点方向（2 bit/端点），只读。
+        (0x044 => pub ghwcfg1: ReadOnly<u32, GHWCFG1::Register>),
         /// Hardware Configuration 2
         ///
-        /// 硬件配置 2。
+        /// 用户硬件配置 2：架构、PHY、主机通道数、队列深度等，只读。
         (0x048 => pub ghwcfg2: ReadOnly<u32, GHWCFG2::Register>),
         /// Hardware Configuration 3
         ///
-        /// 硬件配置 3（DFIFO 深度）。
+        /// 用户硬件配置 3：HCTSIZ 计数器位宽、特性标志、DFIFO 深度，只读。
         (0x04c => pub ghwcfg3: ReadOnly<u32, GHWCFG3::Register>),
         /// Hardware Configuration 4
         ///

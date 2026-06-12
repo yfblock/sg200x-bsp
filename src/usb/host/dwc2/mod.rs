@@ -8,7 +8,7 @@
 //! - [`isr`]：PLIC 中断处理、`GINTMSK`/`HAINTMSK` 配置。
 //! - [`dma`]：共用 DMA 窗口与偏移常量。
 //! - [`channel`]：主机通道调度原语。
-//! - [`control`]：EP0 控制传输与枚举/Hub 便捷函数。
+//! - [`control`]：EP0 控制传输与标准枚举便捷函数。
 //! - [`bulk`]：Bulk IN/OUT。
 //! - [`isoch`]：Isochronous IN。
 
@@ -29,9 +29,8 @@ pub use bulk::{bulk_in, bulk_out};
 pub use channel::{PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP};
 pub use control::{
     ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
-    ep0_control_write_no_data, get_device_vid_pid_default_addr, hub_clear_port_feature,
-    hub_set_port_feature, set_configuration, set_usb_address, usb_post_hub_port_reset_delay,
-    usb_post_set_address_delay,
+    ep0_control_write_no_data, get_device_vid_pid_default_addr, set_configuration,
+    set_usb_address, usb_post_set_address_delay,
 };
 pub use dma::{
     dma_copy_out, dma_rx_slice, dma_write_at, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR,
