@@ -3,9 +3,11 @@
 //! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_root_port()` 调用；
 //! 返回 Mass Storage 设备四元组供后续 [`crate::usb::class::mass_storage`] 使用。
 
+use tock_registers::LocalRegisterCopy;
+
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::host::dwc2::ep0 as dwc2_ep0;
-use crate::usb::setup;
+use crate::usb::host::dwc2;
+use crate::usb::setup::{self, HubPortStatus};
 
 /// 拓扑日志缩进（每级 2 空格）。
 #[inline]
@@ -155,7 +157,7 @@ fn is_msc_candidate(iface_class: u8, vid: u16, pid: u16) -> bool {
 /// 读配置描述符前 64 字节，返回首个 **INTERFACE** 描述符的 `bInterfaceClass`（无则 0）。
 fn first_interface_class(dev: u32, ep0_mps: u32) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         setup::get_descriptor_configuration(0, 64),
         ep0_mps,
@@ -186,7 +188,7 @@ fn parse_msc_interface_endpoints(
     ep0_mps: u32,
 ) -> UsbResult<(u8, u8, u16, u8, u16)> {
     let mut hdr = [0u8; 9];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         setup::get_descriptor_configuration(0, 9),
         ep0_mps,
@@ -201,7 +203,7 @@ fn parse_msc_interface_endpoints(
     }
 
     let mut buf = [0u8; 512];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         setup::get_descriptor_configuration(0, total as u16),
         ep0_mps,
@@ -260,7 +262,7 @@ struct HubInfo {
 
 fn hub_info(hub_dev: u32, ep0_mps: u32) -> UsbResult<HubInfo> {
     let mut buf = [0u8; 64];
-    dwc2_ep0::ep0_control_read(hub_dev, setup::get_descriptor_hub(64), ep0_mps, &mut buf)?;
+    dwc2::ep0_control_read(hub_dev, setup::get_descriptor_hub(64), ep0_mps, &mut buf)?;
     if buf[0] < 7 || buf[1] != setup::USB_DT_HUB {
         return Err(UsbError::Protocol("invalid hub descriptor"));
     }
@@ -274,7 +276,7 @@ fn hub_info(hub_dev: u32, ep0_mps: u32) -> UsbResult<HubInfo> {
 
 fn hub_port_status_w0(hub_dev: u32, port: u16, ep0_mps: u32) -> UsbResult<u16> {
     let mut buf = [0u8; 4];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         hub_dev,
         setup::hub_get_port_status(port),
         ep0_mps,
@@ -295,12 +297,13 @@ fn spin_delay_ms(ms: u32) {
 
 /// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`）→ 文字描述。
 fn port_speed_str(status: u16) -> &'static str {
-    let ls = (status >> 9) & 1;
-    let hs = (status >> 10) & 1;
-    match (hs, ls) {
-        (1, _) => "HS",
-        (_, 1) => "LS",
-        _ => "FS",
+    let s = LocalRegisterCopy::<u16, HubPortStatus::Register>::new(status);
+    if s.is_set(HubPortStatus::HIGH_SPEED) {
+        "HS"
+    } else if s.is_set(HubPortStatus::LOW_SPEED) {
+        "LS"
+    } else {
+        "FS"
     }
 }
 
@@ -317,7 +320,7 @@ fn visit_default_depth(
     port_on_hub: u8,
     st: &mut ScanState,
 ) -> UsbResult<()> {
-    let (vid, pid, ep0_mps, dev_class) = dwc2_ep0::get_device_vid_pid_default_addr()?;
+    let (vid, pid, ep0_mps, dev_class) = dwc2::get_device_vid_pid_default_addr()?;
 
     if parent_hub == 0 && port_on_hub == 0 {
         topo_log!(
@@ -341,9 +344,9 @@ fn visit_default_depth(
 
     if is_hub_device(dev_class, vid, pid) {
         let hub_addr = st.take_addr()?;
-        dwc2_ep0::set_usb_address(hub_addr, ep0_mps)?;
-        dwc2_ep0::usb_post_set_address_delay();
-        dwc2_ep0::set_configuration(u32::from(hub_addr), 1, ep0_mps)?;
+        dwc2::set_usb_address(hub_addr, ep0_mps)?;
+        dwc2::usb_post_set_address_delay();
+        dwc2::set_configuration(u32::from(hub_addr), 1, ep0_mps)?;
 
         topo_log!(depth, "[USB]   -> Hub enumerated addr={} ep0_mps={}",
             hub_addr, ep0_mps);
@@ -357,7 +360,7 @@ fn visit_default_depth(
         // ① 给所有下游端口供电：USB 2.0 spec §11.11.1：hub 上电后端口默认 PowerOff，
         //    必须由 host 显式 SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
         for port in 1..=nports {
-            if let Err(e) = dwc2_ep0::hub_set_port_feature(
+            if let Err(e) = dwc2::hub_set_port_feature(
                 u32::from(hub_addr),
                 u16::from(port),
                 setup::HUB_PORT_FEATURE_POWER,
@@ -382,7 +385,8 @@ fn visit_default_depth(
                     continue;
                 }
             };
-            let conn = status & 1 != 0;
+            let conn = LocalRegisterCopy::<u16, HubPortStatus::Register>::new(status)
+                .is_set(HubPortStatus::CONNECTION);
             topo_log!(
                 depth,
                 "[USB]   -> port {} wPortStatus={:#06x} {}",
@@ -395,14 +399,14 @@ fn visit_default_depth(
             }
 
             // ③ 清 C_PORT_CONNECTION（连接变化位），再 PORT_RESET
-            let _ = dwc2_ep0::hub_clear_port_feature(
+            let _ = dwc2::hub_clear_port_feature(
                 u32::from(hub_addr),
                 u16::from(port),
                 setup::HUB_PORT_FEATURE_C_CONNECTION,
                 ep0_mps,
             );
 
-            if let Err(e) = dwc2_ep0::hub_set_port_feature(
+            if let Err(e) = dwc2::hub_set_port_feature(
                 u32::from(hub_addr),
                 u16::from(port),
                 setup::HUB_PORT_FEATURE_RESET,
@@ -412,7 +416,7 @@ fn visit_default_depth(
                 continue;
             }
             // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms；hub 完成 reset 后会自动置 C_PORT_RESET。
-            dwc2_ep0::usb_post_hub_port_reset_delay();
+            dwc2::usb_post_hub_port_reset_delay();
 
             // ④ 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
             let after = match hub_port_status_w0(u32::from(hub_addr), u16::from(port), ep0_mps) {
@@ -427,13 +431,14 @@ fn visit_default_depth(
                     continue;
                 }
             };
-            let _ = dwc2_ep0::hub_clear_port_feature(
+            let _ = dwc2::hub_clear_port_feature(
                 u32::from(hub_addr),
                 u16::from(port),
                 setup::HUB_PORT_FEATURE_C_RESET,
                 ep0_mps,
             );
-            let enabled = (after >> 1) & 1 != 0;
+            let enabled = LocalRegisterCopy::<u16, HubPortStatus::Register>::new(after)
+                .is_set(HubPortStatus::PORT_ENABLE);
             let speed = port_speed_str(after);
             topo_log!(
                 depth,
@@ -466,9 +471,9 @@ fn visit_default_depth(
 
     // 普通功能设备
     let fn_addr = st.take_addr()?;
-    dwc2_ep0::set_usb_address(fn_addr, ep0_mps)?;
-    dwc2_ep0::usb_post_set_address_delay();
-    dwc2_ep0::set_configuration(u32::from(fn_addr), 1, ep0_mps)?;
+    dwc2::set_usb_address(fn_addr, ep0_mps)?;
+    dwc2::usb_post_set_address_delay();
+    dwc2::set_configuration(u32::from(fn_addr), 1, ep0_mps)?;
 
     let iface_class = first_interface_class(u32::from(fn_addr), ep0_mps).unwrap_or(0);
     topo_log!(

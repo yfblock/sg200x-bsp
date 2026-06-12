@@ -1,5 +1,4 @@
-//! USB 子系统：基于 Synopsys **DWC2** 的 **主机**（[`host`]）栈；启用 feature `device-mode`
-//! 时另有 **设备** 子模块 `device`；类协议在 [`class`]。
+//! USB 子系统：基于 Synopsys **DWC2** 的 **主机**（[`host`]）栈；类协议在 [`class`]。
 //!
 //! # 使用顺序（主机）
 //!
@@ -34,8 +33,6 @@ pub mod setup;
 
 pub mod host;
 pub mod class;
-#[cfg(feature = "device-mode")]
-pub mod device;
 
 pub use error::{UsbError, UsbResult};
 
@@ -82,32 +79,27 @@ pub fn cv182x_phy_base_virt() -> usize {
 
 /// 取 DWC2 全局寄存器视图。
 ///
-/// # 返回值
-/// 未设置 MMIO 基址（或为 0）时返回 `None`。
+/// # Panics
+/// 未调用 [`set_dwc2_base_virt`]（或基址为 0）时 panic。
 #[inline]
-pub fn dwc2_regs() -> Option<&'static Dwc2Regs> {
+pub fn dwc2_regs() -> &'static Dwc2Regs {
     let base = dwc2_base_virt();
-    if base == 0 {
-        return None;
-    }
-    Some(unsafe { &*(base as *const Dwc2Regs) })
+    assert!(base != 0, "DWC2 base not set (call set_dwc2_base_virt)");
+    unsafe { &*(base as *const Dwc2Regs) }
 }
 
 /// 取第 `ch` 号主机通道寄存器块。
 ///
 /// # 参数
-/// - `ch`：主机通道索引；本栈约定 **0** 为 EP0 控制、**1** 为 Bulk/Isoch。
+/// - `ch`：主机通道索引；本栈约定 **0** 为 EP0 控制、**5** 为 Bulk/Isoch。
 ///
-/// # 返回值
-/// `ch` 超出 IP 支持数量或基址未设置时返回 `None`。
+/// # Panics
+/// 基址未设置或 `ch` 超出 IP 支持数量时 panic。
 #[inline]
-pub fn dwc2_channel(ch: u32) -> Option<&'static Dwc2HostChannel> {
-    let regs = dwc2_regs()?;
+pub fn dwc2_channel(ch: u32) -> &'static Dwc2HostChannel {
     let idx = ch as usize;
-    if idx >= DWC2_MAX_HOST_CHANNELS {
-        return None;
-    }
-    Some(&regs.hc[idx])
+    assert!(idx < DWC2_MAX_HOST_CHANNELS, "invalid DWC2 host channel index");
+    &dwc2_regs().hc[idx]
 }
 
 /// 取 CV182x 片内 USB2 PHY 寄存器视图。

@@ -24,3 +24,14 @@ pub fn delay_long() {
 pub fn delay_short() {
     delay(0x10);
 }
+
+/// CPU 自旋忙等（`spin_loop`），用于 USB 轮询、NAK 退避等无定时器场景。
+///
+/// # 参数
+/// - `iterations`：自旋循环次数（非精确时间，与 CPU 频率相关）。
+#[inline]
+pub fn spin_delay(iterations: u32) {
+    for _ in 0..iterations {
+        core::hint::spin_loop();
+    }
+}

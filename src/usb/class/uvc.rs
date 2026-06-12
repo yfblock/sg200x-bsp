@@ -1,11 +1,10 @@
 //! USB Video Class（UVC）：配置描述符解析、`PROBE`/`COMMIT`、**Bulk 或 Isoch IN** 抓一帧。
 //!
 //! 修复要点：视频端点在无数据时大量 **NAK**，须在主机侧重试
-//! （见 [`crate::usb::host::dwc2::ep0::bulk_in`] / [`crate::usb::host::dwc2::ep0::isoch_in_uframe`]）。
+//! （见 [`crate::usb::host::dwc2::bulk_in`] / [`crate::usb::host::dwc2::isoch_in_uframe`]）。
 
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::host::dwc2::ep0 as dwc2_ep0;
-use crate::usb::host::dwc2::ep0::{DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
+use crate::usb::host::dwc2::{self, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 use crate::usb::setup;
 
 const VS_PROBE_CONTROL: u8 = 0x01;
@@ -198,7 +197,7 @@ pub struct UvcStreamSelection {
 /// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
 pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         setup::get_descriptor_configuration(cfg_index, 9),
         ep0_mps,
@@ -212,7 +211,7 @@ pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> U
         return Err(UsbError::Protocol("configuration descriptor too large (>4096)"));
     }
     let mut buf = [0u8; 4096];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         setup::get_descriptor_configuration(cfg_index, total as u16),
         ep0_mps,
@@ -314,8 +313,8 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                         p += 4;
                     }
                 }
-                let fps_x100 = if dflt_ival > 0 { 100_000_000_u32 / dflt_ival.max(1) } else { 0 };
-                let fps_min_x100 = if min_ival > 0 { 100_000_000_u32 / min_ival.max(1) } else { 0 };
+                let fps_x100 = if dflt_ival > 0 { 1_000_000_000_u32 / dflt_ival.max(1) } else { 0 };
+                let fps_min_x100 = if min_ival > 0 { 1_000_000_000_u32 / min_ival.max(1) } else { 0 };
                 log::info!("UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
                     w, h,
                     fps_x100 / 100, fps_x100 % 100,
@@ -461,10 +460,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
 ///
 /// 找到后更新 `sel.alt_setting` 和 `sel.mps_raw`。
 ///
-/// **DWC2 兼容性**：SG2002 等低端 DWC2 不可靠支持 HS 高带宽 Isoch（mult > 1），
-/// 传输能完成但数据内容错误。因此只考虑 mult=1 的候选；若设备协商的 payload
-/// 超过 mult=1 最大带宽，仍选最大 mult=1 alt——摄像头会自适应降低每微帧吞吐，
-/// 帧传输耗时更长但数据正确。
+/// **DWC2 兼容性**：SG2002 DWC2 在 mult>1 时性能严重下降，仅考虑 mult=1 候选。
 fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
     if sel.xfer != UvcXferKind::Isoch || sel.isoch_alts_count == 0 {
         return;
@@ -502,7 +498,7 @@ fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
         .or(best_max)
         .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
     if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
-        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={} (mult>1 skipped)",
+        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
             sel.alt_setting, sel.mps_raw,
             u32::from(sel.mps_raw & 0x7FF) * (u32::from((sel.mps_raw >> 11) & 0x3) + 1),
             new_alt, new_mps_raw, new_total, need);
@@ -617,7 +613,7 @@ fn try_set_cur_u8(
 ) -> bool {
     let setup = uvc_set_cur_vc(vc_if, entity, selector, 1);
     let buf = [value];
-    dwc2_ep0::ep0_control_write(dev, setup, ep0_mps, &buf).is_ok()
+    dwc2::ep0_control_write(dev, setup, ep0_mps, &buf).is_ok()
 }
 
 #[allow(dead_code)]
@@ -630,7 +626,7 @@ fn try_get_cur_u8(
 ) -> Option<u8> {
     let setup = uvc_get_cur_vc(vc_if, entity, selector, 1);
     let mut buf = [0u8; 1];
-    if dwc2_ep0::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
+    if dwc2::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
         Some(buf[0])
     } else {
         None
@@ -647,7 +643,7 @@ fn try_get_cur_u16(
 ) -> Option<u16> {
     let setup = uvc_get_cur_vc(vc_if, entity, selector, 2);
     let mut buf = [0u8; 2];
-    if dwc2_ep0::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
+    if dwc2::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
     } else {
         None
@@ -663,7 +659,7 @@ fn try_get_def_u8(
 ) -> Option<u8> {
     let setup = uvc_get_def_vc(vc_if, entity, selector, 1);
     let mut buf = [0u8; 1];
-    if dwc2_ep0::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
+    if dwc2::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
         Some(buf[0])
     } else {
         None
@@ -679,7 +675,7 @@ fn try_get_def_u16(
 ) -> Option<u16> {
     let setup = uvc_get_def_vc(vc_if, entity, selector, 2);
     let mut buf = [0u8; 2];
-    if dwc2_ep0::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
+    if dwc2::ep0_control_read(dev, setup, ep0_mps, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
     } else {
         None
@@ -696,7 +692,7 @@ fn try_set_cur_u16(
 ) -> bool {
     let setup = uvc_set_cur_vc(vc_if, entity, selector, 2);
     let buf = value.to_le_bytes();
-    dwc2_ep0::ep0_control_write(dev, setup, ep0_mps, &buf).is_ok()
+    dwc2::ep0_control_write(dev, setup, ep0_mps, &buf).is_ok()
 }
 
 /// ProcessingUnit 单项控制描述（selector / 宽度 / 可选覆盖值）。
@@ -942,7 +938,7 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
 pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelection) -> UsbResult<()> {
     reset_frame_continuity();
-    let _ = dwc2_ep0::ep0_control_write_no_data(
+    let _ = dwc2::ep0_control_write_no_data(
         dev,
         setup::set_interface(0, sel.vs_interface),
         ep0_mps,
@@ -951,7 +947,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     let probe_init = build_probe_commit_payload(sel);
     dump_probe("PROBE.SET", &probe_init);
 
-    dwc2_ep0::ep0_control_write(
+    dwc2::ep0_control_write(
         dev,
         uvc_set_cur_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
         ep0_mps,
@@ -959,7 +955,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     )?;
 
     let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
-    if dwc2_ep0::ep0_control_read(
+    if dwc2::ep0_control_read(
         dev,
         uvc_get_max_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
         ep0_mps,
@@ -969,7 +965,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     }
 
     let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
-    dwc2_ep0::ep0_control_read(
+    dwc2::ep0_control_read(
         dev,
         uvc_get_cur_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
         ep0_mps,
@@ -995,14 +991,14 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
         probe[22..26].copy_from_slice(&alt_mps.to_le_bytes());
     }
 
-    dwc2_ep0::ep0_control_write(
+    dwc2::ep0_control_write(
         dev,
         uvc_set_cur_vs(sel.vs_interface, VS_COMMIT_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
         ep0_mps,
         &probe,
     )?;
 
-    dwc2_ep0::ep0_control_write_no_data(
+    dwc2::ep0_control_write_no_data(
         dev,
         setup::set_interface(sel.alt_setting, sel.vs_interface),
         ep0_mps,
@@ -1017,7 +1013,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
 /// 将 VS 接口切回 `alt=0`，并清空抓帧连续性状态。
 pub fn uvc_stop_streaming(dev: u32, ep0_mps: u32, vs_if: u8) -> UsbResult<()> {
     reset_frame_continuity();
-    dwc2_ep0::ep0_control_write_no_data(dev, setup::set_interface(0, vs_if), ep0_mps)
+    dwc2::ep0_control_write_no_data(dev, setup::set_interface(0, vs_if), ep0_mps)
 }
 
 #[inline]
@@ -1089,7 +1085,7 @@ fn process_packet(
     let (eof, payload_len, fid_opt, info) = parse_uvc_packet(pkt);
     if *debug_remaining > 0 {
         log::info!("UVC-pkt uf={} len={} hlen={} info={:#04x} fid={:?} eof={} payload={}",
-            dwc2_ep0::current_uframe(),
+            dwc2::current_uframe(),
             pkt.len(), if pkt.is_empty() { 0 } else { pkt[0] as usize },
             info, fid_opt, eof, payload_len);
         *debug_remaining -= 1;
@@ -1129,12 +1125,12 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
         // 这里要求 EOI 真实存在；不在则丢弃累积、用新 FID 重新开始帧，把当前 packet 当作
         // 新帧首包正常累积，**不**回调 caller 也不浪费一次完整的 capture。
         let has_eoi = *p.jpeg_len >= 2
-            && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
+            && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
                 .map(|t| t[0] == 0xff && t[1] == 0xd9)
                 .unwrap_or(false);
         if FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
             log::info!("UVC-trace FID-flip uf={} frame_fid={} new_fid={} saw_data={} jpeg_len={} has_eoi={}",
-                dwc2_ep0::current_uframe(), *frame_fid, p.cur_fid, *saw_data, *p.jpeg_len, has_eoi);
+                dwc2::current_uframe(), *frame_fid, p.cur_fid, *saw_data, *p.jpeg_len, has_eoi);
         }
         if *saw_data && has_eoi {
             return Ok(true);
@@ -1156,20 +1152,20 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
         if p.jpeg_len.checked_add(payload.len()).unwrap_or(usize::MAX) > p.jpeg_cap {
             return Err(UsbError::Hardware("video assemble overflow"));
         }
-        dwc2_ep0::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len, payload)?;
+        dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len, payload)?;
         *p.jpeg_len += payload.len();
         *saw_data = true;
     }
     // EOF 时同样校验 EOI(`ff d9`)：0c45:64ab 的 metadata 帧带合法 EOF 标记但 jpeg 仅
     // 有 SOI，没有 EOI（典型 1008 字节）。仅看 EOF flag 会让这种残帧被上抛。
     let has_eoi_now = *p.jpeg_len >= 2
-        && dwc2_ep0::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
+        && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
             .map(|t| t[0] == 0xff && t[1] == 0xd9)
             .unwrap_or(false);
     let frame_done = p.eof && *saw_data && has_eoi_now;
     if p.eof && FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
         log::info!("UVC-trace EOF uf={} fid={} info={:#04x} payload={} saw_data={} jpeg_len={} has_eoi={} done={}",
-            dwc2_ep0::current_uframe(), p.cur_fid, p.info, p.payload_len, *saw_data, *p.jpeg_len, has_eoi_now, frame_done);
+            dwc2::current_uframe(), p.cur_fid, p.info, p.payload_len, *saw_data, *p.jpeg_len, has_eoi_now, frame_done);
     }
     if p.eof && *saw_data && !has_eoi_now {
         // 残帧（带 EOF 但无 EOI）：丢弃累积，回到 WaitFirstSwitch 等下一次 FID 翻转。
@@ -1223,7 +1219,7 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
     let mut debug_remaining: u32 = 0;
     let frame_dbg = FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed);
     // 只有 FRAME_DEBUG=true 时才采集 uframe 时间戳，避免每帧多余的 mmio 读。
-    let uf_start = if frame_dbg { dwc2_ep0::current_uframe() } else { 0 };
+    let uf_start = if frame_dbg { dwc2::current_uframe() } else { 0 };
     let mut uf_first_switch: u32 = uf_start;
     let mut uframes_at_switch: u32 = 0;
 
@@ -1233,19 +1229,19 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
             if chunk == 0 {
                 return Err(UsbError::Protocol("bad chunk"));
             }
-            let mut pid = dwc2_ep0::PID_DATA0;
+            let mut pid = dwc2::PID_DATA0;
             loop {
-                let actual = dwc2_ep0::bulk_in(dev, ep, maxp, pid, chunk, work_off)?;
+                let actual = dwc2::bulk_in(dev, ep, maxp, pid, chunk, work_off)?;
                 if actual == 0 {
                     return Err(UsbError::Protocol("bulk IN 0 bytes"));
                 }
                 transfers = transfers.wrapping_add(1);
-                pid = if pid == dwc2_ep0::PID_DATA0 {
-                    dwc2_ep0::PID_DATA1
+                pid = if pid == dwc2::PID_DATA0 {
+                    dwc2::PID_DATA1
                 } else {
-                    dwc2_ep0::PID_DATA0
+                    dwc2::PID_DATA0
                 };
-                let slice = dwc2_ep0::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
+                let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
                 let eof = process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)?;
                 if eof {
                     if frame_dbg {
@@ -1260,55 +1256,67 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
         }
         UvcXferKind::Isoch => {
             const MAX_UFRAMES: u32 = 80_000;
-            for _ in 0..MAX_UFRAMES {
-                transfers = transfers.wrapping_add(1);
-                let actual = dwc2_ep0::isoch_in_uframe(dev, ep, sel.mps_raw, work_off)?;
-                if actual == 0 {
-                    continue;
-                }
-                data_transfers = data_transfers.wrapping_add(1);
-                let slice = dwc2_ep0::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
+            let mut eof_found = false;
 
-                let was_waiting = matches!(state, FrameState::WaitFirstSwitch { .. });
-                let eof = if mult == 1 {
-                    process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)?
-                } else {
-                    let mut hit_eof = false;
-                    let mut off = 0usize;
-                    while off < slice.len() {
-                        let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
-                        let pkt = &slice[off..end];
-                        off = end;
-                        if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)? {
-                            hit_eof = true;
-                            break;
+            let (total_uf, data_uf) = dwc2::isoch_in_uframe_batch(
+                dev,
+                ep,
+                sel.mps_raw,
+                MAX_UFRAMES,
+                |_uframe_idx, slice| {
+                    transfers = transfers.wrapping_add(1);
+                    data_transfers = data_transfers.wrapping_add(1);
+
+                    let was_waiting = matches!(state, FrameState::WaitFirstSwitch { .. });
+                    let eof = if mult == 1 {
+                        process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)?
+                    } else {
+                        let mut hit_eof = false;
+                        let mut off = 0usize;
+                        while off < slice.len() {
+                            let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
+                            let pkt = &slice[off..end];
+                            off = end;
+                            if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)? {
+                                hit_eof = true;
+                                break;
+                            }
                         }
+                        hit_eof
+                    };
+
+                    if frame_dbg && was_waiting && matches!(state, FrameState::Capturing { .. }) {
+                        uf_first_switch = dwc2::current_uframe();
+                        uframes_at_switch = transfers;
                     }
-                    hit_eof
-                };
-                if frame_dbg && was_waiting && matches!(state, FrameState::Capturing { .. }) {
-                    uf_first_switch = dwc2_ep0::current_uframe();
-                    uframes_at_switch = transfers;
-                }
-                if eof {
-                    if let FrameState::Capturing { frame_fid, .. } = state {
-                        LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+
+                    if eof {
+                        eof_found = true;
+                        if let FrameState::Capturing { frame_fid, .. } = state {
+                            LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+                        }
+                        if frame_dbg {
+                            let uf_end = dwc2::current_uframe();
+                            let dwait = uf_first_switch.wrapping_sub(uf_start) & 0xffff;
+                            let dcap = uf_end.wrapping_sub(uf_first_switch) & 0xffff;
+                            log::info!("UVC: frame {} bytes ({} loops, {} data; HFNUM dwait={} uf ({}.{} ms / {} loops), dcap={} uf ({}.{} ms / {} loops), mult={})",
+                                jpeg_len, transfers, data_transfers,
+                                dwait, dwait / 8, (dwait % 8) * 125 / 10, uframes_at_switch,
+                                dcap, dcap / 8, (dcap % 8) * 125 / 10, transfers - uframes_at_switch,
+                                mult);
+                        }
+                        return Ok(true); // 停止批量处理
                     }
-                    if frame_dbg {
-                        let uf_end = dwc2_ep0::current_uframe();
-                        let dwait = uf_first_switch.wrapping_sub(uf_start) & 0xffff;
-                        let dcap = uf_end.wrapping_sub(uf_first_switch) & 0xffff;
-                        log::info!("UVC: frame {} bytes ({} loops, {} data; HFNUM dwait={} uf ({}.{} ms / {} loops), dcap={} uf ({}.{} ms / {} loops), mult={})",
-                            jpeg_len, transfers, data_transfers,
-                            dwait, dwait / 8, (dwait % 8) * 125 / 10, uframes_at_switch,
-                            dcap, dcap / 8, (dcap % 8) * 125 / 10, transfers - uframes_at_switch,
-                            mult);
-                    }
-                    return Ok(jpeg_len);
-                }
+                    Ok(false) // 继续处理
+                },
+            )?;
+
+            if eof_found {
+                return Ok(jpeg_len);
             }
+
             log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
-                transfers, data_transfers, jpeg_len, mult);
+                total_uf, data_uf, jpeg_len, mult);
             Err(UsbError::Timeout)
         }
     }

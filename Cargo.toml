@@ -31,14 +31,6 @@ c906 = []
 # （参考 `sg2002-arceos/modules/axdriver/src/cvitek_eth.rs`）。
 # 需要全局 `alloc`（`Vec` + `Box`）。
 ethernet = []
-# 启用 USB Device (Slave/Peripheral) 模式：DWC2 走 ForceDevMode，提供 EP0
-# 状态机 + 描述符表。本 feature 与 host 模式同时编译可能（应用根据需要二
-# 选一调用 init），仅引入 device/* 模块的代码。
-device-mode = []
-# 在 [`device-mode`] 之上构建一个最小 CDC-ACM (USB 虚拟串口) 实现，PC 端会
-# 列出 /dev/ttyACM*。仅供 bring-up / 协议联调验证，不做高级功能（如 break、
-# parity、多端口）。
-device-cdc-acm = ["device-mode"]
 # 调试 USB 主机：在 CV182x bring-up 时显式清掉 `GAHBCFG.DMA_EN`，让 DWC2 走 PIO 路径，
 # 用于排查 DMA 桥/cache 问题。仅 `usb/host/dwc2/controller.rs::init_gahb_dma_cv182x`
 # 检查本 feature；正常使用应**关闭**。

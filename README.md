@@ -15,7 +15,7 @@ SG2002/SG200x 系列芯片的板级支持包 (BSP)，提供硬件抽象层驱动
 | rstc | ✅ 完成 | 复位控制器驱动 |
 | mp | ✅ 完成 | 多处理器启动驱动 |
 | dma | ✅ 完成 | Synopsys DesignWare AXI DMA |
-| usb | ✅ 完成 | USB 主机（DWC2）及类协议（UVC / Mass Storage 等） |
+| usb | ✅ 完成 | USB 主机（DWC2）：枚举、拓扑扫描、UVC / Mass Storage 类协议 |
 | utils | ✅ 完成 | D-cache / DMA 一致性等通用工具 |
 | ethernet | 🔌 可选 | 启用 feature `ethernet` 时编译板载 cvitek-eth（DWMAC + 内部 EPHY），需 `alloc` |
 
@@ -25,17 +25,16 @@ SG2002/SG200x 系列芯片的板级支持包 (BSP)，提供硬件抽象层驱动
 
 ```toml
 [dependencies]
-sg200x-bsp = "0.5"
+sg200x-bsp = "0.6"
 ```
 
-可选功能（在依赖中打开对应 feature，例如 `sg200x-bsp = { version = "0.5", features = ["ethernet"] }`）：
+可选功能（在依赖中打开对应 feature，例如 `sg200x-bsp = { version = "0.6", features = ["ethernet"] }`）：
 
 | Feature | 说明 |
 |---------|------|
 | `cv182x-host` | 默认启用；CV1812H/SG2002 USB PHY/控制器相关 bring-up 路径 |
 | `c906` | 默认启用；T-Head C906 非标 D-cache 指令；非 C906 核请关闭 |
 | `ethernet` | 板载以太网驱动（需 `alloc`） |
-| `device-mode` / `device-cdc-acm` | USB Device（含最小 CDC-ACM 示例） |
 | `usb-force-no-dma` | 调试：USB 主机强制 PIO，仅用于排查 DMA/cache |
 
 ## 示例
@@ -181,6 +180,61 @@ SG2002 芯片共有 4 个 PWM 控制器，共 16 路 PWM 输出：
 - 支持 CPU 自动清除软复位 (SOFT_CPUAC_RSTN)
 - 支持 CPU 软复位 (SOFT_CPU_RSTN)
 - 复位配置为低电平有效
+
+## USB 模块详情
+
+当前 BSP 仅实现 **USB 主机**模式（DWC2 Force Host + 根口枚举）。USB Device / CDC-ACM 暂未包含在本仓库中。
+
+### 代码结构
+
+```
+usb/
+├── error.rs, setup.rs          # 错误类型与标准 SETUP 包构造
+├── host/
+│   ├── dwc2/                   # Synopsys DWC2 主机访问层
+│   │   ├── regs.rs             # 寄存器/位域（tock-registers）
+│   │   ├── controller.rs       # 上电、软复位、FIFO、HPRT0
+│   │   ├── isr.rs              # PLIC 中断、GINTMSK/HAINTMSK
+│   │   ├── dma.rs              # 共用 DMA 窗口与偏移常量
+│   │   ├── channel.rs          # 通道调度原语（ch_xfer、HCCHAR）
+│   │   ├── control.rs          # EP0 控制传输、SET_ADDRESS 等
+│   │   ├── bulk.rs             # Bulk IN/OUT
+│   │   └── isoch.rs            # Isochronous IN（UVC 微帧抓包）
+│   ├── enumerate.rs            # 根口连接检查 + 枚举入口
+│   └── topology.rs             # Hub 递归扫描，标记 MSC/UVC 候选
+└── class/
+    ├── uvc.rs                  # UVC 描述符解析、PROBE/COMMIT、抓帧
+    └── mass_storage.rs         # MSC BBB + SCSI 命令封装
+```
+
+通道约定：**通道 0** 专用于 EP0 控制传输；**通道 5** 专用于 Bulk / Isoch（与 Linux DWC2 HCD 分配习惯一致）。
+
+### 主机 bring-up 顺序
+
+1. 板级设置 MMIO 基址：[`set_dwc2_base_virt`](https://docs.rs/sg200x-bsp/latest/sg200x_bsp/usb/fn.set_dwc2_base_virt.html)；启用 `cv182x-host` 时再 [`set_cv182x_phy_base_virt`](https://docs.rs/sg200x-bsp/latest/sg200x_bsp/usb/fn.set_cv182x_phy_base_virt.html)。
+2. 若 VA≠PA，注册 [`set_usb_dma_to_phys_fn`](https://docs.rs/sg200x-bsp/latest/sg200x_bsp/usb/fn.set_usb_dma_to_phys_fn.html) 供 `HCDMA` 地址转换。
+3. 实现 `log` crate 的 `Logger`（串口输出）。
+4. 调用 `dwc2::dwc2_host_init()`，确认 `HPRT0.CONNSTS` 后执行总线复位。
+5. 调用 `host::enumerate_root_port()` 或 `host::topology::enumerate_bus_print_tree()` 完成枚举。
+
+可选：注册 PLIC 中断以启用 Isoch 中断路径：
+
+```rust
+axhal::irq::register(
+    sg200x_bsp::usb::host::dwc2::DWC2_IRQ_NUM,      // SG2002: 30
+    sg200x_bsp::usb::host::dwc2::dwc2_interrupt_handler,
+);
+```
+
+### UVC 摄像头（Bulk / Isoch）
+
+类驱动在 `usb::class::uvc`：
+
+- `read_configuration_descriptor` + `parse_uvc_video_stream`：解析配置描述符，**优先选择 Bulk IN**，否则回退 **Isoch IN**（记录各 alt 的 `mps_raw`、高带宽 `mult`）。
+- `uvc_start_video_stream`：PROBE/COMMIT 协商后启动视频流。
+- `uvc_capture_one_frame`：按 `UvcStreamSelection.xfer` 走 `bulk_in` 或 `isoch_in_uframe_batch` 抓一帧 MJPEG。
+
+完整板级示例见 ArceOS 工程 `examples/helloworld`（`usb_camera.rs`）。
 
 ## 多处理器模块详情
 

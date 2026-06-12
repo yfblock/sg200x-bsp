@@ -1,29 +1,40 @@
 //! Synopsys DesignWare USB 2.0 OTG (DWC2) **主机**侧访问层。
 //!
-//! 约定：**通道 0** 专用于 EP0 控制传输；**通道 1** 专用于 Bulk / Isoch（与部分 IP 在
-//! 单通道上复用控制+批量时的异常行为隔离）。
+//! 约定：**通道 0** 专用于 EP0 控制传输；**通道 5** 专用于 Bulk / Isoch。
 //!
 //! 子模块：
 //! - [`regs`]：`tock-registers` 寄存器/位域/主机通道结构。
 //! - [`controller`]：上电、软复位、Force Host、FIFO、`HPRT0` 根口操作。
-//! - [`ep0`]：SETUP/Data/Status 调度、MSC/UVC 共用 DMA 窗。
+//! - [`isr`]：PLIC 中断处理、`GINTMSK`/`HAINTMSK` 配置。
+//! - [`dma`]：共用 DMA 窗口与偏移常量。
+//! - [`channel`]：主机通道调度原语。
+//! - [`control`]：EP0 控制传输与枚举/Hub 便捷函数。
+//! - [`bulk`]：Bulk IN/OUT。
+//! - [`isoch`]：Isochronous IN。
 
 pub mod regs;
 pub mod controller;
-pub mod ep0;
+pub mod isr;
+pub mod dma;
+pub mod channel;
+pub mod control;
+pub mod bulk;
+pub mod isoch;
 
-pub use controller::{
-    debug_dump_root_port_hw, dwc2_host_init, dwc2_host_root_bus_reset_pulse, dwc2_hprt0_read,
-    dwc2_probe, hprt_connsts, hprt_enabled, hprt_lnsts, hprt_pwr, hprt_speed_bits,
-    suggested_bulk_mps,
-};
+pub use controller::{dwc2_host_init, dwc2_host_root_bus_reset_pulse, dwc2_probe};
 
-pub use ep0::{
-    bulk_in, bulk_out, current_uframe, dma_copy_out, dma_rx_slice,
-    dma_write_at, ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
+pub use isr::{dwc2_interrupt_handler, DWC2_IRQ_NUM};
+
+pub use bulk::{bulk_in, bulk_out};
+pub use channel::{PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP};
+pub use control::{
+    ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
     ep0_control_write_no_data, get_device_vid_pid_default_addr, hub_clear_port_feature,
-    hub_set_port_feature, isoch_in,
-    isoch_in_uframe, set_configuration, set_usb_address, usb_post_hub_port_reset_delay,
-    usb_post_set_address_delay, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR, DMA_OFF_UVC_BULK,
-    MSC_SECTOR_DMA_CAP, PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP, UVC_BULK_DMA_CAP,
+    hub_set_port_feature, set_configuration, set_usb_address, usb_post_hub_port_reset_delay,
+    usb_post_set_address_delay,
 };
+pub use dma::{
+    dma_copy_out, dma_rx_slice, dma_write_at, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR,
+    DMA_OFF_UVC_BULK, MSC_SECTOR_DMA_CAP, UVC_BULK_DMA_CAP,
+};
+pub use isoch::{current_uframe, isoch_in, isoch_in_uframe, isoch_in_uframe_batch};

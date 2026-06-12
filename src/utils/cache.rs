@@ -127,7 +127,7 @@ pub fn dcache_invalidate_range(start: usize, size: usize) {
 }
 
 // ============================================================================
-// (2) 粗粒度 DMA 一致性：AArch64 按行 / C906 全清
+// (2) 粗粒度 DMA 一致性：AArch64 按行 / C906 按行
 // ============================================================================
 
 #[cfg(target_arch = "aarch64")]
@@ -173,30 +173,16 @@ pub unsafe fn dcache_invalidate_after_dma(ptr: *mut u8, len: usize) {
     unsafe { dcache_op_range(ptr as usize, ptr as usize + len, DcacheOp::Invalidate) }
 }
 
-/// T-Head C906：`dcache.ciall` 清洗并无效全部 D-Cache（与 ArceOS `dma.md` 示例一致）。
+/// USB DWC2 通过 `HCDMA` 访问内存：缓冲区须在 **DMA 可见** 的相干视图上。
+/// 按 cache line 精细 flush，避免 `dcache.ciall` 全清带来的巨大开销。
 #[cfg(all(target_arch = "riscv64", feature = "c906"))]
-#[inline(always)]
-unsafe fn riscv64_c906_dcache_ciall() {
-    unsafe {
-        core::arch::asm!(
-            ".long 0x0030000b",
-            "fence rw, rw",
-            options(nostack),
-        );
-    }
-}
-
-/// USB DWC2 通过 `HCDMA` 访问内存：缓冲区须在 **DMA 可见** 的相干视图上；C906 上须 flush。
-#[cfg(all(target_arch = "riscv64", feature = "c906"))]
-pub unsafe fn dcache_clean_for_dma(_ptr: *const u8, _len: usize) {
-    let _ = (_ptr, _len);
-    unsafe { riscv64_c906_dcache_ciall() }
+pub unsafe fn dcache_clean_for_dma(ptr: *const u8, len: usize) {
+    dcache_clean_range(ptr as usize, len);
 }
 
 #[cfg(all(target_arch = "riscv64", feature = "c906"))]
-pub unsafe fn dcache_invalidate_after_dma(_ptr: *mut u8, _len: usize) {
-    let _ = (_ptr, _len);
-    unsafe { riscv64_c906_dcache_ciall() }
+pub unsafe fn dcache_invalidate_after_dma(ptr: *mut u8, len: usize) {
+    dcache_invalidate_range(ptr as usize, len);
 }
 
 /// 非 C906 RISC-V 核：无法精确 line clean，仅做 `fence rw, rw` 保证内存序。

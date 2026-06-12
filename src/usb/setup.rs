@@ -6,6 +6,18 @@
 //! 类专用 SETUP（如 Mass Storage 的 `Bulk-Only Reset` / `GET_MAX_LUN`）见
 //! [`crate::usb::class::mass_storage`]；UVC 的 VS 控制见 [`crate::usb::class::uvc`]。
 
+use tock_registers::register_bitfields;
+
+register_bitfields![u16,
+    /// Hub `GET_PORT_STATUS` 返回的 `wPortStatus`（USB 2.0 hub spec §11.24.2）。
+    pub HubPortStatus [
+        CONNECTION OFFSET(0) NUMBITS(1) [],
+        PORT_ENABLE OFFSET(1) NUMBITS(1) [],
+        LOW_SPEED OFFSET(9) NUMBITS(1) [],
+        HIGH_SPEED OFFSET(10) NUMBITS(1) [],
+    ],
+];
+
 /// 构造标准 `GET_DESCRIPTOR(Device)` 的 8 字节 SETUP。
 ///
 /// # 参数

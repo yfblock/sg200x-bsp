@@ -10,7 +10,7 @@
 //!    - [`MscDevice`]：保存 USB 地址、Bulk IN/OUT 端点号 + MPS、IN/OUT 数据 PID toggle 状态。
 //!    - [`MscDevice::inquiry`]、[`MscDevice::test_unit_ready`]、
 //!      [`MscDevice::read_capacity_10`]、[`MscDevice::read_10`] 等 SCSI 命令。
-//!    - 数据落到 [`crate::usb::host::dwc2::ep0::DMA_OFF_SECTOR`] 起始的 DMA 缓冲，
+//!    - 数据落到 [`crate::usb::host::dwc2::DMA_OFF_SECTOR`] 起始的 DMA 缓冲，
 //!      读后请用 [`MscDevice::read_data`] 取出已 invalidate 的数据。
 //!
 //! 拓扑扫描期间，[`crate::usb::host::topology`] 会同时把 **MSC 接口号** 和
@@ -18,9 +18,9 @@
 //! caller 可直接 [`MscDevice::from_enumerated`] 构造一个就绪的设备句柄。
 
 use crate::usb::error::{UsbError, UsbResult};
-use crate::usb::host::dwc2::ep0::{
-    self, bulk_in, bulk_out, dma_rx_slice, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR,
-    MSC_SECTOR_DMA_CAP, PID_DATA0, PID_DATA1,
+use crate::usb::host::dwc2::{
+    bulk_in, bulk_out, dma_rx_slice, ep0_control_read_one_byte, ep0_control_write_no_data,
+    DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR, MSC_SECTOR_DMA_CAP, PID_DATA0, PID_DATA1,
 };
 use crate::usb::host::MscEnumerated;
 
@@ -67,7 +67,7 @@ pub fn get_max_lun_setup(interface: u16) -> [u8; 8] {
 /// - `interface`：MSC 接口号（`wIndex`）。
 /// - `ep0_mps`：该设备控制端点 0 的最大包长（字节，来自设备描述符）。
 pub fn bulk_only_reset(dev: u32, interface: u16, ep0_mps: u32) -> UsbResult<()> {
-    ep0::ep0_control_write_no_data(dev, mass_storage_reset_setup(interface), ep0_mps)
+    ep0_control_write_no_data(dev, mass_storage_reset_setup(interface), ep0_mps)
 }
 
 /// 对已寻址 MSC 设备执行 `GET_MAX_LUN`，返回 `bMaxLun`（多 LUN 设备使用）。
@@ -78,7 +78,7 @@ pub fn bulk_only_reset(dev: u32, interface: u16, ep0_mps: u32) -> UsbResult<()> 
 /// # 返回值
 /// `bMaxLun`：最大 LUN 编号（逻辑单元数 = `bMaxLun + 1`）。
 pub fn get_max_lun(dev: u32, interface: u16, ep0_mps: u32) -> UsbResult<u8> {
-    ep0::ep0_control_read_one_byte(dev, get_max_lun_setup(interface), ep0_mps)
+    ep0_control_read_one_byte(dev, get_max_lun_setup(interface), ep0_mps)
 }
 
 /// CBW `dCBWSignature` = `'USBC'`（小端：`0x43425355`）。
