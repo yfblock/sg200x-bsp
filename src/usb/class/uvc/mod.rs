@@ -11,14 +11,14 @@ mod setup;
 mod stream;
 
 pub use capture::{
-    reset_frame_continuity, uvc_capture_one_frame, FRAME_DEBUG, LAST_EOF_FID,
-    UVC_ASSEMBLED_JPEG_DMA_OFF, UVC_WORK_AREA_BYTES,
+    LAST_EOF_FID, UVC_ASSEMBLED_JPEG_DMA_OFF, UVC_WORK_AREA_BYTES, UvcStreamRunStats,
+    reset_frame_continuity, uvc_capture_one_frame, uvc_stream_frames,
 };
 pub use control::{
-    parse_uvc_control_entities, uvc_init_camera_controls, UvcControlEntities, UvcImageTuning,
+    UvcControlEntities, UvcImageTuning, parse_uvc_control_entities, uvc_init_camera_controls,
 };
 pub use parse::{
-    parse_uvc_video_stream, read_configuration_descriptor, set_preferred_max_pixels,
-    PREFERRED_MAX_PIXELS, UvcStreamSelection,
+    PREFERRED_MAX_PIXELS, UvcStreamSelection, parse_uvc_video_stream,
+    read_configuration_descriptor, set_preferred_frame_interval, set_preferred_max_pixels,
 };
 pub use stream::{uvc_start_video_stream, uvc_stop_streaming};

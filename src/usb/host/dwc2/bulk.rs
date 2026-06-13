@@ -2,11 +2,11 @@
 
 use tock_registers::interfaces::Readable;
 
-use crate::usb::error::{UsbError, UsbResult};
-use crate::utils::{cache, spin_delay};
-use super::channel::{ch_xfer, ch_xfer_video_retryable, hcchar_build, pktcnt_for, CH_BULK};
+use super::channel::{CH_BULK, ch_xfer, ch_xfer_video_retryable, hcchar_build, pktcnt_for};
 use super::dma;
 use super::regs::{HCCHAR, HCTSIZ};
+use crate::usb::error::{UsbError, UsbResult};
+use crate::utils::{cache, spin_delay};
 
 use crate::usb::dwc2_channel as channel_regs;
 
@@ -35,8 +35,10 @@ pub fn bulk_out(
         ch_xfer(
             CH_BULK,
             hc,
-            (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pkts) + HCTSIZ::XFERSIZE.val(data.len() as u32))
-                .value,
+            (HCTSIZ::PID.val(pid)
+                + HCTSIZ::PKTCNT.val(pkts)
+                + HCTSIZ::XFERSIZE.val(data.len() as u32))
+            .value,
             dma_off as u32,
         )?;
         Ok(())
@@ -59,7 +61,8 @@ pub fn bulk_in(
         let hc = hcchar_build(dev, ep, mps, HCCHAR::EPTYPE::Bulk, true, 0);
         let pkts = pktcnt_for(mps, len as u32);
         let tsiz =
-            (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pkts) + HCTSIZ::XFERSIZE.val(len as u32)).value;
+            (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pkts) + HCTSIZ::XFERSIZE.val(len as u32))
+                .value;
 
         for _ in 0..4_000_000u32 {
             match ch_xfer_video_retryable(CH_BULK, hc, tsiz, dma_off as u32) {

@@ -12,28 +12,29 @@
 //! - [`bulk`]：Bulk IN/OUT。
 //! - [`isoch`]：Isochronous IN。
 
-pub mod regs;
-pub mod controller;
-pub mod isr;
-pub mod dma;
+pub mod bulk;
 pub mod channel;
 pub mod control;
-pub mod bulk;
+pub mod controller;
+pub mod dma;
 pub mod isoch;
+pub mod isr;
+pub mod regs;
 
 pub use controller::{dwc2_host_init, dwc2_host_root_bus_reset_pulse, dwc2_probe};
 
-pub use isr::{dwc2_interrupt_handler, DWC2_IRQ_NUM};
+pub use isr::{DWC2_IRQ_NUM, dwc2_interrupt_handler};
 
 pub use bulk::{bulk_in, bulk_out};
 pub use channel::{PID_DATA0, PID_DATA1, PID_DATA2, PID_SETUP};
 pub use control::{
-    ep0_control_read, ep0_control_read_one_byte, ep0_control_write,
-    ep0_control_write_no_data, get_device_vid_pid_default_addr, set_configuration,
-    set_usb_address, usb_post_set_address_delay,
+    ep0_control_read, ep0_control_read_one_byte, ep0_control_write, ep0_control_write_no_data,
+    get_device_vid_pid_default_addr, set_configuration, set_usb_address,
+    usb_post_set_address_delay,
 };
 pub use dma::{
-    dma_copy_out, dma_rx_slice, dma_write_at, DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR,
-    DMA_OFF_UVC_BULK, MSC_SECTOR_DMA_CAP, UVC_BULK_DMA_CAP,
+    DMA_OFF_CBW, DMA_OFF_CSW, DMA_OFF_SECTOR, DMA_OFF_UVC_BULK, MSC_SECTOR_DMA_CAP,
+    UVC_BULK_DMA_CAP, dma_copy_out, dma_rx_slice, dma_write_at,
 };
+pub(crate) use dma::dma_append_unchecked;
 pub use isoch::{current_uframe, isoch_in, isoch_in_uframe, isoch_in_uframe_batch};

@@ -12,5 +12,5 @@ pub mod cache;
 pub mod delay;
 pub mod indent;
 
-pub use delay::{delay, delay_long, delay_short, spin_delay};
+pub use delay::{delay, delay_long, delay_short, spin_delay, wait_for_irq_or_spin};
 pub use indent::log_indent;

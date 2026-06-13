@@ -38,14 +38,25 @@ pub struct UvcStreamSelection {
 /// 优先选择尺寸 ≤ 此上限的 frame。0 表示不限制（沿用旧的"最大分辨率优先"行为）。
 pub static PREFERRED_MAX_PIXELS: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
+pub static PREFERRED_FRAME_INTERVAL: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
 
 /// 设置 [`PREFERRED_MAX_PIXELS`]。必须在 [`parse_uvc_video_stream`] 之前调用。
 pub fn set_preferred_max_pixels(p: u32) {
     PREFERRED_MAX_PIXELS.store(p, core::sync::atomic::Ordering::Relaxed);
 }
 
+/// 设置期望的 frame interval（UVC 100ns 单位）。0 表示使用设备最快 interval。
+pub fn set_preferred_frame_interval(interval: u32) {
+    PREFERRED_FRAME_INTERVAL.store(interval, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
-pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> UsbResult<[u8; 4096]> {
+pub fn read_configuration_descriptor(
+    dev: u32,
+    ep0_mps: u32,
+    cfg_index: u8,
+) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
     dwc2::ep0_control_read(
         dev,
@@ -58,7 +69,9 @@ pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> U
     }
     let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
     if total > 4096 {
-        return Err(UsbError::Protocol("configuration descriptor too large (>4096)"));
+        return Err(UsbError::Protocol(
+            "configuration descriptor too large (>4096)",
+        ));
     }
     let mut buf = [0u8; 4096];
     dwc2::ep0_control_read(
@@ -128,40 +141,82 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 last_fmt_ix = cfg[i + 3];
                 cur_fmt_subtype_for_frame = st;
                 cur_fmt_ix_for_frame = cfg[i + 3];
-                log::info!("UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={} subtype={:#04x} ({})",
-                    last_fmt_ix, st,
-                    if st == VS_FORMAT_MJPEG { "MJPEG" } else { "Uncompressed" });
             }
             if (st == VS_FRAME_MJPEG || st == VS_FRAME_UNCOMPRESSED) && bl >= 26 {
                 let frame_ix = cfg[i + 3];
                 let w = u16::from_le_bytes([cfg[i + 5], cfg[i + 6]]);
                 let h = u16::from_le_bytes([cfg[i + 7], cfg[i + 8]]);
-                let dflt_ival = u32::from_le_bytes([cfg[i + 21], cfg[i + 22], cfg[i + 23], cfg[i + 24]]);
+                let dflt_ival =
+                    u32::from_le_bytes([cfg[i + 21], cfg[i + 22], cfg[i + 23], cfg[i + 24]]);
                 let ival_type = cfg[i + 25];
                 let mut min_ival = dflt_ival;
                 if ival_type == 0 && bl >= 38 {
-                    let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
-                    if dw_min > 0 { min_ival = dw_min; }
+                    let dw_min =
+                        u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
+                    if dw_min > 0 {
+                        min_ival = dw_min;
+                    }
                 } else if ival_type > 0 {
                     let n = ival_type as usize;
                     let mut p = i + 26;
                     for _ in 0..n {
-                        if p + 4 > i + bl { break; }
+                        if p + 4 > i + bl {
+                            break;
+                        }
                         let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
-                        if v > 0 && v < min_ival { min_ival = v; }
+                        if v > 0 && v < min_ival {
+                            min_ival = v;
+                        }
                         p += 4;
                     }
                 }
-                let fps_x100 = if dflt_ival > 0 { 1_000_000_000_u32 / dflt_ival.max(1) } else { 0 };
-                let fps_min_x100 = if min_ival > 0 { 1_000_000_000_u32 / min_ival.max(1) } else { 0 };
-                log::info!("UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
-                    w, h,
-                    fps_x100 / 100, fps_x100 % 100,
-                    fps_min_x100 / 100, fps_min_x100 % 100);
-                let dflt_ival = if min_ival > 0 { min_ival } else { dflt_ival };
-                let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
-                let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG
-                    || st == VS_FRAME_MJPEG;
+                let preferred_ival =
+                    PREFERRED_FRAME_INTERVAL.load(core::sync::atomic::Ordering::Relaxed);
+                let selected_ival = if preferred_ival > 0 && ival_type > 0 {
+                    let mut best = dflt_ival;
+                    let mut best_delta = u32::MAX;
+                    let mut p = i + 26;
+                    for _ in 0..(ival_type as usize) {
+                        if p + 4 > i + bl {
+                            break;
+                        }
+                        let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
+                        if v > 0 {
+                            let delta = v.abs_diff(preferred_ival);
+                            if delta < best_delta {
+                                best_delta = delta;
+                                best = v;
+                            }
+                        }
+                        p += 4;
+                    }
+                    best
+                } else if preferred_ival > 0 && ival_type == 0 && bl >= 38 {
+                    let dw_min =
+                        u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
+                    let dw_max =
+                        u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
+                    let dw_step =
+                        u32::from_le_bytes([cfg[i + 34], cfg[i + 35], cfg[i + 36], cfg[i + 37]]);
+                    if dw_min > 0 && dw_max >= dw_min && preferred_ival >= dw_min {
+                        let clamped = preferred_ival.min(dw_max);
+                        if dw_step > 0 {
+                            dw_min + ((clamped - dw_min) / dw_step) * dw_step
+                        } else {
+                            clamped
+                        }
+                    } else if min_ival > 0 {
+                        min_ival
+                    } else {
+                        dflt_ival
+                    }
+                } else if min_ival > 0 {
+                    min_ival
+                } else {
+                    dflt_ival
+                };
+                let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, selected_ival);
+                let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG || st == VS_FRAME_MJPEG;
                 fn rank((_, _, pw, ph, _): (u8, u8, u16, u16, u32)) -> i32 {
                     let w = pw as i32;
                     let h = ph as i32;
@@ -175,25 +230,32 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                             (-(area - pref_max)).saturating_sub(1_000)
                         };
                     }
-                    if w == 1280 && h == 720 { return 1_000_000; }
-                    if w == 640 && h == 480 { return 900_000; }
-                    if w == 800 && h == 600 { return 800_000; }
-                    if w == 1024 && h == 768 { return 750_000; }
-                    if w == 320 && h == 240 { return 700_000; }
-                    if area <= 1280 * 720 { 600_000 - (1280 * 720 - area) } else { 100_000 - (area - 1280 * 720) }
+                    match (w, h) {
+                        (1280, 720) => 1_000_000,
+                        (640, 480) => 900_000,
+                        (800, 600) => 800_000,
+                        (1024, 768) => 750_000,
+                        (320, 240) => 700_000,
+                        _ if area <= 1280 * 720 => 600_000 - (1280 * 720 - area),
+                        _ => 100_000 - (area - 1280 * 720),
+                    }
                 }
                 if is_mjpeg {
                     let pick_better = match mjpeg_pick {
                         None => true,
                         Some(prev) => rank(pick) > rank(prev),
                     };
-                    if pick_better { mjpeg_pick = Some(pick); }
+                    if pick_better {
+                        mjpeg_pick = Some(pick);
+                    }
                 } else {
                     let pick_better = match uncomp_pick {
                         None => true,
                         Some(prev) => rank(pick) > rank(prev),
                     };
-                    if pick_better { uncomp_pick = Some(pick); }
+                    if pick_better {
+                        uncomp_pick = Some(pick);
+                    }
                 }
                 let _ = last_fmt_subtype;
                 let _ = last_fmt_ix;
@@ -213,12 +275,11 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 continue;
             }
             let ep_num = ep_addr & 0x0F;
-            let total = u32::from(mps) * u32::from(mult);
+            let _total = u32::from(mps) * u32::from(mult);
             if xfer != ENDPOINT_ATTR_ISOCH {
                 i += bl;
                 continue;
             }
-            log::info!("UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind=Isoch mps={mps} mult={mult} total={total}/uframe mps_raw={mps_raw:#06x}");
             let tak = (cur_alt, ep_num, mps_raw, cur_ifc_num);
             let new_mult = mult;
             best_isoch = Some(match best_isoch {
@@ -226,16 +287,8 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 Some(b) => {
                     let old_mps = b.2 & 0x7FF;
                     let old_mult = ((b.2 >> 11) & 0x3) + 1;
-                    let new_score = if new_mult == 1 {
-                        10_000_000u32 + u32::from(mps)
-                    } else {
-                        u32::from(mps) * u32::from(new_mult)
-                    };
-                    let old_score = if old_mult == 1 {
-                        10_000_000u32 + u32::from(old_mps)
-                    } else {
-                        u32::from(old_mps) * u32::from(old_mult)
-                    };
+                    let new_score = u32::from(mps) * u32::from(new_mult);
+                    let old_score = u32::from(old_mps) * u32::from(old_mult);
                     if new_score > old_score { tak } else { b }
                 }
             });
@@ -257,9 +310,6 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
             None => (1, 1, 0, 0, 333_333, false),
         },
     };
-
-    log::info!("UVC: SEL if={vs_if} alt={alt} ep={epn} Isoch mps_raw={:#06x} fmt_ix={fmt_ix} frame_ix={frame_ix} {}x{} iv={interval} mjpeg={is_mjpeg}",
-        mps_raw, frame_w, frame_h);
 
     Ok(UvcStreamSelection {
         vs_interface: vs_if,

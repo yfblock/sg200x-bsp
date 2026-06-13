@@ -26,9 +26,8 @@ pub const UVC_BULK_DMA_CAP: usize = 384 * 1024;
 
 /// Isoch uframe 接收缓冲偏移（在 UVC Bulk 区之后）。
 pub const DMA_OFF_UFRAME_BUF: usize = 1024 + 384 * 1024;
-/// uframe 接收缓冲区大小。
+/// 单个 uframe 接收缓冲区大小。
 pub const UFRAME_BUF_SIZE: usize = 4096;
-
 /// 整个 `DmaBuf` 大小（供边界检查）。
 const DMA_BUF_TOTAL: usize = 1024 + 384 * 1024 + 4096;
 const _: () = assert!(DMA_BUF_TOTAL <= 1024 + 384 * 1024 + 4096);
@@ -82,10 +81,16 @@ pub fn dma_write_at(off: usize, src: &[u8]) -> UsbResult<()> {
     if end > DMA_BUF_TOTAL {
         return Err(UsbError::Protocol("dma write out of buf"));
     }
+    dma_append_unchecked(off, src);
+    Ok(())
+}
+
+/// 热路径 payload 追加：调用方须已保证 `[off, off+src.len())` 在 DMA 窗口内。
+#[inline(always)]
+pub(crate) fn dma_append_unchecked(off: usize, src: &[u8]) {
     unsafe {
         core::ptr::copy_nonoverlapping(src.as_ptr(), dma_ptr().add(off), src.len());
     }
-    Ok(())
 }
 
 /// 从内部 DMA 窗口拷贝到 `dst`（**不**做 cache 维护；调用方须已 invalidate 或仅 CPU 写入区）。

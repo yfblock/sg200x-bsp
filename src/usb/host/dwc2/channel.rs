@@ -1,13 +1,13 @@
 //! 主机通道调度原语：启停通道、单次传输、HCCHAR 组装。
 
-use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
+use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
+use super::dma;
+use super::isr::{HCINT_ALL_W1C, HcintSnapshot};
+use super::regs::{HCCHAR, HCINT};
 use crate::usb::error::{UsbError, UsbResult};
 use crate::utils::spin_delay;
-use super::dma;
-use super::isr::{HcintSnapshot, HCINT_ALL_W1C};
-use super::regs::{HCCHAR, HCINT};
 
 use crate::usb::dwc2_channel as channel;
 
@@ -22,7 +22,7 @@ pub const PID_DATA2: u32 = 1;
 pub const PID_DATA1: u32 = 2;
 pub const PID_SETUP: u32 = 3;
 
-#[inline]
+#[inline(always)]
 pub(crate) fn usb_bus_fence_before_dma() {
     #[cfg(target_arch = "riscv64")]
     unsafe {
@@ -30,41 +30,69 @@ pub(crate) fn usb_bus_fence_before_dma() {
     }
 }
 
+/// 等待通道禁用（纯轮询，无 spin_delay）
+#[inline(always)]
 pub(crate) fn ch_wait_disabled(ch: u32) -> UsbResult<()> {
     let c = channel(ch);
-    for _ in 0..2_000_000u32 {
+    // 热路径：快速检查
+    for _ in 0..1000u32 {
         if !c.hcchar.is_set(HCCHAR::CHENA) {
             return Ok(());
         }
-        spin_delay(2);
+    }
+    // 冷路径：完整等待
+    for _ in 0..1_999_000u32 {
+        if !c.hcchar.is_set(HCCHAR::CHENA) {
+            return Ok(());
+        }
     }
     Err(UsbError::Timeout)
 }
 
 /// 若通道仍忙，按 Linux `dwc2_hc_halt` 同时置 `CHENA|CHDIS` 请求停止。
+/// 纯轮询，无 spin_delay。
+#[inline(always)]
 pub(crate) fn ch_halt(ch: u32) {
     let c = channel(ch);
     if !c.hcchar.is_set(HCCHAR::CHENA) {
         return;
     }
     c.hcchar.modify(HCCHAR::CHENA::SET + HCCHAR::CHDIS::SET);
-    for _ in 0..500_000u32 {
+    // 热路径：快速检查
+    for _ in 0..100u32 {
         if !c.hcchar.is_set(HCCHAR::CHENA) {
             return;
         }
-        spin_delay(2);
+    }
+    // 冷路径：完整等待
+    for _ in 0..499_900u32 {
+        if !c.hcchar.is_set(HCCHAR::CHENA) {
+            return;
+        }
     }
 }
 
+/// 等待通道 halt（优化轮询）
+/// 优化：分离热路径和冷路径，最小 spin_delay
+#[inline(always)]
 pub(crate) fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
     let c = channel(ch);
-    for _ in 0..8_000_000u32 {
+    // 热路径：快速检查（大多数情况下会在前几次迭代完成）
+    for _ in 0..1000u32 {
         let hi = c.hcint.extract();
         if hi.is_set(HCINT::CHHLTD) {
             c.hcint.set(hi.get());
             return Ok(hi);
         }
-        spin_delay(2);
+    }
+    // 冷路径：完整等待，最小 spin_delay
+    for _ in 0..7_999_000u32 {
+        let hi = c.hcint.extract();
+        if hi.is_set(HCINT::CHHLTD) {
+            c.hcint.set(hi.get());
+            return Ok(hi);
+        }
+        spin_delay(1); // 最小延迟，避免过度轮询
     }
     Err(UsbError::Timeout)
 }
@@ -101,14 +129,6 @@ pub(crate) unsafe fn ch_xfer(
         }
         if st.is_set(HCINT::XACTERR) {
             if xact_left == 0 {
-                log::info!(
-                    "USB-XACT EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    ch,
-                    hcchar,
-                    hctsiz,
-                    dmap,
-                    st.get()
-                );
                 return Err(UsbError::Protocol("ch xfer error (XACT)"));
             }
             xact_left -= 1;
@@ -117,28 +137,12 @@ pub(crate) unsafe fn ch_xfer(
         }
         if st.is_set(HCINT::NAK) {
             if attempt == NAK_RETRIES {
-                log::info!(
-                    "USB-NAK EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    ch,
-                    hcchar,
-                    hctsiz,
-                    dmap,
-                    st.get()
-                );
                 return Err(UsbError::Protocol("ch xfer NAK exhausted"));
             }
             spin_delay(200_000);
             continue;
         }
         if !st.is_set(HCINT::XFERCOMPL) {
-            log::info!(
-                "USB-CHHLTD-NO-XFER ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                ch,
-                hcchar,
-                hctsiz,
-                dmap,
-                st.get()
-            );
             return Err(UsbError::Protocol("CHHLTD without XFERCOMPL"));
         }
         return Ok(st);

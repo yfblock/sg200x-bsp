@@ -198,7 +198,7 @@ struct PuCtrl {
     bit: u32,
     selector: u8,
     width: u8,
-    name: &'static str,
+    _name: &'static str,
     override_val: Option<u16>,
 }
 
@@ -208,7 +208,6 @@ fn pu_apply_one(dev: u32, ep0_mps: u32, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl
     if (bm & (1u32 << ctrl.bit)) == 0 {
         return;
     }
-    let want_src = ctrl.override_val.map(|_| "override").unwrap_or("def");
     match ctrl.width {
         1 => {
             let cur = try_get_cur_u8(dev, ep0_mps, vc_if, pu, ctrl.selector);
@@ -218,14 +217,8 @@ fn pu_apply_one(dev: u32, ep0_mps: u32, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl
             };
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
-                    let ok = try_set_cur_u8(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
-                    log::info!(
-                        "UVC: PU.{} {c} -> {d} ({want_src}, {})",
-                        ctrl.name,
-                        if ok { "ok" } else { "set 失败" }
-                    );
+                    let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
                 }
-                (None, _) => log::warn!("UVC: PU.{} GET_CUR 失败", ctrl.name),
                 _ => {}
             }
         }
@@ -237,14 +230,8 @@ fn pu_apply_one(dev: u32, ep0_mps: u32, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl
             };
             match (cur, want) {
                 (Some(c), Some(d)) if c != d => {
-                    let ok = try_set_cur_u16(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
-                    log::info!(
-                        "UVC: PU.{} {c} -> {d} ({want_src}, {})",
-                        ctrl.name,
-                        if ok { "ok" } else { "set 失败" }
-                    );
+                    let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, ctrl.selector, d);
                 }
-                (None, _) => log::warn!("UVC: PU.{} GET_CUR 失败", ctrl.name),
                 _ => {}
             }
         }
@@ -285,14 +272,6 @@ pub fn uvc_init_camera_controls(
     ent: &UvcControlEntities,
     tune: &UvcImageTuning,
 ) -> UsbResult<()> {
-    log::info!(
-        "UVC: VC if={} CT={:?} (bm={:#010x}) PU={:?} (bm={:#010x})",
-        ent.vc_interface,
-        ent.camera_terminal_id,
-        ent.ct_controls,
-        ent.processing_unit_id,
-        ent.pu_controls
-    );
 
     if let Some(pu) = ent.processing_unit_id {
         let vc_if = ent.vc_interface;
@@ -303,15 +282,15 @@ pub fn uvc_init_camera_controls(
         //   D0=Brightness D1=Contrast D2=Hue D3=Saturation D4=Sharpness
         //   D5=Gamma D6=WB Temp D8=Backlight D9=Gain D10=PowerLineFreq
         //   D11=Hue Auto D12=WB Temp Auto
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 0, selector: PU_BRIGHTNESS_CONTROL, width: 2, name: "Brightness", override_val: tune.brightness });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 1, selector: PU_CONTRAST_CONTROL, width: 2, name: "Contrast", override_val: tune.contrast });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 2, selector: PU_HUE_CONTROL, width: 2, name: "Hue", override_val: tune.hue });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 3, selector: PU_SATURATION_CONTROL, width: 2, name: "Saturation", override_val: tune.saturation });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 4, selector: PU_SHARPNESS_CONTROL, width: 2, name: "Sharpness", override_val: tune.sharpness });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 0, selector: PU_BRIGHTNESS_CONTROL, width: 2, _name: "Brightness", override_val: tune.brightness });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 1, selector: PU_CONTRAST_CONTROL, width: 2, _name: "Contrast", override_val: tune.contrast });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 2, selector: PU_HUE_CONTROL, width: 2, _name: "Hue", override_val: tune.hue });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 3, selector: PU_SATURATION_CONTROL, width: 2, _name: "Saturation", override_val: tune.saturation });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 4, selector: PU_SHARPNESS_CONTROL, width: 2, _name: "Sharpness", override_val: tune.sharpness });
         // PU_GAMMA selector = 0x09
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 5, selector: 0x09, width: 2, name: "Gamma", override_val: tune.gamma });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 8, selector: PU_BACKLIGHT_COMPENSATION, width: 2, name: "Backlight", override_val: tune.backlight });
-        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 9, selector: PU_GAIN_CONTROL, width: 2, name: "Gain", override_val: tune.gain });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 5, selector: 0x09, width: 2, _name: "Gamma", override_val: tune.gamma });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 8, selector: PU_BACKLIGHT_COMPENSATION, width: 2, _name: "Backlight", override_val: tune.backlight });
+        pu_apply_one(dev, ep0_mps, vc_if, pu, bm, PuCtrl { bit: 9, selector: PU_GAIN_CONTROL, width: 2, _name: "Gain", override_val: tune.gain });
 
         // ② 白平衡
         match tune.white_balance_temp_k {
@@ -321,7 +300,6 @@ pub fn uvc_init_camera_controls(
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 0);
                 }
                 let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, k);
-                log::info!("UVC: PU.WB = {k}K (manual)");
             }
             // 默认走 Auto WB（若支持 D12）
             _ => {
@@ -332,12 +310,9 @@ pub fn uvc_init_camera_controls(
                             let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, d);
                         }
                     let _ = try_set_cur_u8(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 1);
-                    let cur_t = try_get_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(0);
-                    log::info!("UVC: PU.WB = Auto (cur {cur_t}K)");
                 } else if (bm & (1 << 6)) != 0 {
                     let val = try_get_def_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(4500);
                     let _ = try_set_cur_u16(dev, ep0_mps, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, val);
-                    log::info!("UVC: PU.WB = {val}K (no-auto)");
                 }
             }
         }
@@ -358,14 +333,11 @@ pub fn uvc_init_camera_controls(
             // AE Mode 是位掩码（UVC 1.5）：0x01=Manual, 0x02=Auto,
             // 0x04=Shutter Priority, 0x08=Aperture Priority。
             // 廉价 webcam 多数只接受 0x08（光圈优先=自动曝光），先试 0x02 失败则降级。
-            let mut applied = 0u8;
             for &mode in &[0x02u8, 0x08, 0x04] {
                 if try_set_cur_u8(dev, ep0_mps, ent.vc_interface, ct, CT_AE_MODE_CONTROL, mode) {
-                    applied = mode;
                     break;
                 }
             }
-            log::info!("UVC: CT.AeMode = {applied:#04x}");
 
             if (ent.ct_controls & (1 << 2)) != 0 {
                 let _ = try_set_cur_u8(

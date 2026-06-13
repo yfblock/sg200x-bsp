@@ -8,17 +8,17 @@
 //! `GDFIFOCFG`、`PCGCTL`、`TOUTCAL`），见
 //! [Sipeed LicheeRV-Nano `params.c`](https://github.com/sipeed/LicheeRV-Nano-Build/blob/d4003f15b35d43ad4842f427050ab2bba0114fa5/linux_5.10/drivers/usb/dwc2/params.c#L217)。
 
-use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
+use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use crate::usb::error::{UsbError, UsbResult};
-use crate::utils::spin_delay;
-use crate::usb::{self, dwc2_base_virt};
 use super::isr;
 use super::regs::{
     Dwc2Regs, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTSTS, GOTGCTL, GRSTCTL, GUSBCFG,
     HCFG, HPRT0,
 };
+use crate::usb::error::{UsbError, UsbResult};
+use crate::usb::{self, dwc2_base_virt};
+use crate::utils::spin_delay;
 
 use crate::usb::dwc2_regs;
 
@@ -37,10 +37,23 @@ fn dbg_dwc2_init_timeout(phase: &'static str) {
     let rst_done = regs.grstctl.is_set(GRSTCTL::CSFTRST_DONE);
     let rx_flush = regs.grstctl.is_set(GRSTCTL::RXFFLSH);
     let tx_flush = regs.grstctl.is_set(GRSTCTL::TXFFLSH);
-    log::warn!("USB-TOUT dwc2-init [{}] GRSTCTL={:#010x} AHBIDLE={} CSFTRST={} CSFTRST_DONE={} RXFFLSH={} TXFFLSH={}",
-        phase, grst, ahb_idle, csftrst, rst_done, rx_flush, tx_flush);
-    log::warn!("USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
-        phase, gint, gahb, hprt);
+    log::warn!(
+        "USB-TOUT dwc2-init [{}] GRSTCTL={:#010x} AHBIDLE={} CSFTRST={} CSFTRST_DONE={} RXFFLSH={} TXFFLSH={}",
+        phase,
+        grst,
+        ahb_idle,
+        csftrst,
+        rst_done,
+        rx_flush,
+        tx_flush
+    );
+    log::warn!(
+        "USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
+        phase,
+        gint,
+        gahb,
+        hprt
+    );
 }
 
 // Linux `core.h`：`snpsid >= 0x4f54291a` 时配置 `GDFIFOCFG`（`hcd.c`）。
@@ -59,7 +72,9 @@ const DWC2_CORE_REV_MASK: u32 = 0xffff;
 /// `Ok((GHWCFG1, GHWCFG2, GHWCFG3))` 原始寄存器值；基址未设或读全零则返回 [`UsbError::Hardware`]。
 pub unsafe fn dwc2_probe() -> UsbResult<(u32, u32, u32)> {
     if dwc2_base_virt() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware(
+            "DWC2 base not set (call set_dwc2_base_virt)",
+        ));
     }
     let regs = dwc2_regs();
     let h1 = regs.ghwcfg1.get();
@@ -128,7 +143,9 @@ fn force_host_mode() -> UsbResult<()> {
         }
         spin_delay(32);
     }
-    Err(UsbError::Hardware("CURMODE_HOST not set after FORCEHOSTMODE"))
+    Err(UsbError::Hardware(
+        "CURMODE_HOST not set after FORCEHOSTMODE",
+    ))
 }
 
 /// 配置 RX / NPTX / PTX FIFO（与 Linux `dwc2` 常见默认值同量级；QEMU `raspi3b` 可接受）。
@@ -151,11 +168,8 @@ fn init_fifos() {
 fn init_gahb() {
     let regs = dwc2_regs();
     let arch = regs.ghwcfg2.read(GHWCFG2::ARCH);
-    regs.gahbcfg.modify(
-        GAHBCFG::DMA_EN::CLEAR
-            + GAHBCFG::GLBL_INTR_EN::SET
-            + GAHBCFG::HBSTLEN.val(3),
-    );
+    regs.gahbcfg
+        .modify(GAHBCFG::DMA_EN::CLEAR + GAHBCFG::GLBL_INTR_EN::SET + GAHBCFG::HBSTLEN.val(3));
     if arch == 2 {
         regs.gahbcfg.modify(GAHBCFG::DMA_EN::SET);
     }
@@ -163,18 +177,16 @@ fn init_gahb() {
 
 #[cfg(not(feature = "cv182x-host"))]
 fn init_hcfg_fs_ls() {
-    dwc2_regs().hcfg.modify(
-        HCFG::FSLSSUPP::SET + HCFG::FSLSPCLKSEL::Pll48Mhz,
-    );
+    dwc2_regs()
+        .hcfg
+        .modify(HCFG::FSLSSUPP::SET + HCFG::FSLSPCLKSEL::Pll48Mhz);
 }
 
 /// Bulk/Isoch 主机通道号（与 [`super::channel`] 中 `CH_BULK` 一致）。
 /// HPRT0 的 W1C 位掩码：RMW 写入时须清零，否则会把读回的 1 原样写回并触发 W1C 副作用
 ///（`ENA` 写 1 = disable port）。与 Linux `dwc2_clear_hprt_intr_bits()` 等价。
-const HPRT0_W1C_MASK: u32 = HPRT0::CONNDET.mask
-    | HPRT0::ENA.mask
-    | HPRT0::ENACHG.mask
-    | HPRT0::OVRCURCHG.mask;
+const HPRT0_W1C_MASK: u32 =
+    HPRT0::CONNDET.mask | HPRT0::ENA.mask | HPRT0::ENACHG.mask | HPRT0::OVRCURCHG.mask;
 
 /// 安全修改 `HPRT0`：先剥掉 W1C 位再合并新字段，避免 `modify()` 误触发 W1C。
 #[inline]
@@ -218,7 +230,9 @@ fn port_reset_pulse() {
 /// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
 pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     if dwc2_base_virt() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware(
+            "DWC2 base not set (call set_dwc2_base_virt)",
+        ));
     }
     clear_hprt_condet_if_set(dwc2_regs());
     port_reset_pulse();
@@ -228,7 +242,10 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
 // --- CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）---
 
 #[cfg(feature = "cv182x-host")]
-fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
+fn wait_grstctl_handshake(
+    field: tock_registers::fields::Field<u32, GRSTCTL::Register>,
+    set: bool,
+) -> UsbResult<()> {
     let regs = dwc2_regs();
     for _ in 0..3_000_000u32 {
         let on = regs.grstctl.is_set(field);
@@ -302,8 +319,15 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
     regs.hptxfsiz
         .set(((ptx << 16) & 0xffff_0000) | ((rx + nptx) & 0xffff));
 
-    log::info!("USB: FIFO config: total_depth={} words, RX={} words ({}B), NPTX={} words, PTX={} words ({}B)",
-        total, rx, rx * 4, nptx, ptx, ptx * 4);
+    log::info!(
+        "USB: FIFO config: total_depth={} words, RX={} words ({}B), NPTX={} words, PTX={} words ({}B)",
+        total,
+        rx,
+        rx * 4,
+        nptx,
+        ptx,
+        ptx * 4
+    );
 
     let snpsid = regs.gsnpsid.get();
     let ded = regs.ghwcfg4.is_set(GHWCFG4::DED_FIFO_EN);
@@ -341,11 +365,12 @@ fn init_gusbcfg_cv182x_utmi16_hs() {
     let regs = dwc2_regs();
     let utmi_w = regs.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
     let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
-    log::debug!("USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
-        if want_16bit { 1 } else { 0 });
-    let mut field = GUSBCFG::FORCEHOSTMODE::SET
-        + GUSBCFG::ULPI_UTMI_SEL::CLEAR
-        + GUSBCFG::TOUTCAL.val(0x7);
+    log::debug!(
+        "USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
+        if want_16bit { 1 } else { 0 }
+    );
+    let mut field =
+        GUSBCFG::FORCEHOSTMODE::SET + GUSBCFG::ULPI_UTMI_SEL::CLEAR + GUSBCFG::TOUTCAL.val(0x7);
     if want_16bit {
         field += GUSBCFG::PHYIF16::SET;
     } else {
@@ -358,16 +383,17 @@ fn init_gusbcfg_cv182x_utmi16_hs() {
 fn init_gahb_dma_cv182x() {
     let regs = dwc2_regs();
     let arch = regs.ghwcfg2.read(GHWCFG2::ARCH);
-    regs.gahbcfg.modify(
-        GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET,
-    );
+    regs.gahbcfg
+        .modify(GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET);
     if arch == 2 {
         regs.gahbcfg.modify(GAHBCFG::DMA_EN::SET);
     }
     #[cfg(feature = "usb-force-no-dma")]
     {
         regs.gahbcfg.modify(GAHBCFG::DMA_EN::CLEAR);
-        log::warn!("USB-DBG usb-force-no-dma: DMA_EN cleared (ARCH={arch}, expect fail on int-DMA IP)");
+        log::debug!(
+            "USB-DBG usb-force-no-dma: DMA_EN cleared (ARCH={arch}, expect fail on int-DMA IP)"
+        );
     }
 }
 
@@ -386,16 +412,19 @@ fn cv182x_usb2_phy_host_clear_utmi_override() {
     phy.reg014.set(0);
     spin_delay(200_000);
     let now = phy.reg014.get();
-    log::debug!("USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
-        old, now);
+    log::debug!(
+        "USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
+        old,
+        now
+    );
 }
 
 /// Linux 在 `speed == HS` 时**不**置 `HCFG_FSLSSUPP`；RPi/全速演示才需要 FSLS。
 #[cfg(feature = "cv182x-host")]
 fn hcfg_clear_fs_ls_for_high_speed() {
-    dwc2_regs().hcfg.modify(
-        HCFG::FSLSSUPP::CLEAR + HCFG::FSLSPCLKSEL.val(0),
-    );
+    dwc2_regs()
+        .hcfg
+        .modify(HCFG::FSLSSUPP::CLEAR + HCFG::FSLSPCLKSEL.val(0));
 }
 
 /// M1：软复位、强制 Host、FIFO、GAHB、HCFG、根口上电（及 CV182x PHY 下拉）。
@@ -405,7 +434,9 @@ fn hcfg_clear_fs_ls_for_high_speed() {
 /// 成功返回 Ok，不保证已有设备连接；请读 `HPRT0.CONNSTS`。
 pub fn dwc2_host_init() -> UsbResult<()> {
     if dwc2_base_virt() == 0 {
-        return Err(UsbError::Hardware("DWC2 base not set (call set_dwc2_base_virt)"));
+        return Err(UsbError::Hardware(
+            "DWC2 base not set (call set_dwc2_base_virt)",
+        ));
     }
     isr::dwc2_host_irq_mask_and_clear();
 

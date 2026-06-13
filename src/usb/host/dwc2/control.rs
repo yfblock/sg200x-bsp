@@ -1,14 +1,12 @@
 //! EP0 控制传输与标准枚举便捷函数（通道 0）。
 
-use crate::usb::UsbClass;
-use crate::usb::error::{UsbError, UsbResult};
-use crate::utils::{cache, spin_delay};
-use crate::usb::setup;
-use super::channel::{
-    self, hcchar_build, pktcnt_for, CH_CTL, PID_DATA0, PID_DATA1, PID_SETUP,
-};
+use super::channel::{self, CH_CTL, PID_DATA0, PID_DATA1, PID_SETUP, hcchar_build, pktcnt_for};
 use super::dma::{self, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
+use crate::usb::UsbClass;
+use crate::usb::error::{UsbError, UsbResult};
+use crate::usb::setup;
+use crate::utils::{cache, spin_delay};
 
 /// `SET_ADDRESS` 后粗延时，满足 USB 2.0 在下一事务前使用新地址的要求。
 pub fn usb_post_set_address_delay() {
@@ -137,8 +135,10 @@ pub fn get_device_vid_pid_default_addr() -> UsbResult<(u16, u16, u32, UsbClass)>
         channel::ch_xfer(
             CH_CTL,
             hc,
-            (HCTSIZ::PID.val(PID_DATA1) + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(wlen as u32))
-                .value,
+            (HCTSIZ::PID.val(PID_DATA1)
+                + HCTSIZ::PKTCNT.val(1)
+                + HCTSIZ::XFERSIZE.val(wlen as u32))
+            .value,
             OFF_EP0 as u32,
         )?;
         cache::dcache_invalidate_after_dma(dma::dma_ptr().add(OFF_EP0), wlen as usize);
@@ -201,7 +201,10 @@ pub fn ep0_control_read(
                     .value,
                 DMA_OFF_SMALL_IO as u32,
             )?;
-            cache::dcache_invalidate_after_dma(dma::dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
+            cache::dcache_invalidate_after_dma(
+                dma::dma_ptr().add(DMA_OFF_SMALL_IO),
+                chunk as usize,
+            );
             core::ptr::copy_nonoverlapping(
                 dma::dma_ptr().add(DMA_OFF_SMALL_IO),
                 out.as_mut_ptr().add(out_off),
@@ -228,12 +231,7 @@ pub fn ep0_control_read(
 }
 
 /// 控制写：`SETUP` + `DATA` OUT（可多包）+ `STATUS` IN（ZLP）。
-pub fn ep0_control_write(
-    dev: u32,
-    setup_pkt: [u8; 8],
-    ep0_mps: u32,
-    data: &[u8],
-) -> UsbResult<()> {
+pub fn ep0_control_write(dev: u32, setup_pkt: [u8; 8], ep0_mps: u32, data: &[u8]) -> UsbResult<()> {
     if data.len() > 4096 {
         return Err(UsbError::Protocol("bad ep0 write data len"));
     }

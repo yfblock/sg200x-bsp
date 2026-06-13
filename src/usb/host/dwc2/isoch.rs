@@ -1,27 +1,42 @@
 //! Isochronous IN 传输（通道 5）。
 
-use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
+use tock_registers::interfaces::{Readable, Writeable};
 
-use crate::usb::error::{UsbError, UsbResult};
-use crate::utils::{cache, spin_delay};
 use super::channel::{
-    self, hcchar_build, pktcnt_for, usb_bus_fence_before_dma, CH_BULK, PID_DATA0, PID_DATA1,
-    PID_DATA2,
+    self, CH_BULK, PID_DATA0, PID_DATA1, PID_DATA2, hcchar_build, pktcnt_for,
+    usb_bus_fence_before_dma,
 };
-use super::dma::{self, DMA_OFF_UFRAME_BUF, UFRAME_BUF_SIZE, UVC_BULK_DMA_CAP};
-use super::isr::HCINT_ALL_W1C;
+use super::dma::{self, UVC_BULK_DMA_CAP};
+use super::isr::{HCINT_ALL_W1C, enable_isoch_channel_irq, prepare_isoch_done, wait_isoch_done};
 use super::regs::{HCCHAR, HCINT, HCTSIZ, HFNUM};
+use crate::usb::error::{UsbError, UsbResult};
+use crate::utils::cache;
 
 use crate::usb::{dwc2_channel as channel_regs, dwc2_regs};
 
+/// `HCCHAR.ODDFRM`（bit 29）：与 `HFNUM.FRNUM` 奇偶对齐，每微帧切换一次即可。
+const HCCHAR_ODDFRM_BIT: u32 = 1 << 29;
+
+#[inline(always)]
+fn oddfrm_for_current_uframe() -> u32 {
+    if dwc2_regs().hfnum.read(HFNUM::FRNUM) & 1 == 0 {
+        HCCHAR_ODDFRM_BIT
+    } else {
+        0
+    }
+}
+
 /// 当前 USB 微帧编号（`HFNUM` 低 16 位）；每 microframe (125µs) 递增并回绕。
-#[inline]
+#[inline(always)]
 pub fn current_uframe() -> u32 {
     dwc2_regs().hfnum.read(HFNUM::FRNUM)
 }
 
-/// Isoch IN 高带宽：在 **下一微帧** 启动一次通道，最多接收 `mult` 个 USB 事务（每个 ≤ `mps` 字节）。
+/// Isoch IN 高带宽：优化轮询模式。
+///
+/// 移除 spin_delay，纯寄存器轮询，最大化性能。
+#[inline(never)] // 不内联，避免代码膨胀
 pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbResult<usize> {
     let mps = u32::from(mps_raw & 0x7ff);
     let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
@@ -40,58 +55,99 @@ pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbRe
     let pktcnt = mult;
 
     unsafe {
-        let hc_base = hcchar_build(dev, ep, mps, HCCHAR::EPTYPE::Isochronous, true, mult.clamp(1, 3));
-        let tsiz =
-            (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize)).value;
-
+        let hc_base = hcchar_build(
+            dev,
+            ep,
+            mps,
+            HCCHAR::EPTYPE::Isochronous,
+            true,
+            mult.saturating_sub(1),
+        );
         let c = channel_regs(CH_BULK);
-        channel::ch_wait_disabled(CH_BULK)?;
-        channel::ch_halt(CH_BULK);
+
+        // 快速路径：如果通道已经禁用，跳过等待
+        if c.hcchar.is_set(HCCHAR::CHENA) {
+            channel::ch_wait_disabled(CH_BULK)?;
+            channel::ch_halt(CH_BULK);
+        }
+
+        // 设置传输参数
         c.hcsplt.set(0);
         c.hcint.set(HCINT_ALL_W1C);
-        c.hctsiz.set(tsiz);
+        c.hctsiz.write(
+            HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize),
+        );
         let dmap = dma::dma_phys(dma_off);
         usb_bus_fence_before_dma();
         c.hcdma.set(dmap);
         usb_bus_fence_before_dma();
-        let mut oddfrm_reg = LocalRegisterCopy::<u32, HCCHAR::Register>::new(0);
-        if dwc2_regs().hfnum.read(HFNUM::FRNUM) & 1 == 0 {
-            oddfrm_reg.modify(HCCHAR::ODDFRM::SET);
-        }
-        let mut armed = LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc_base | oddfrm_reg.get());
+
+        // 构建 HCCHAR 值
+        let mut armed = LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc_base | oddfrm_for_current_uframe());
         armed.modify(HCCHAR::CHENA::SET);
+
+        // 启动传输
         c.hcchar.set(armed.get());
 
-        let st = channel::ch_wait_halted(CH_BULK)?;
-        if st.is_set(HCINT::STALL) {
-            return Err(UsbError::Stall);
+        // 优化轮询：无 spin_delay，纯寄存器检查
+        // 热路径：快速检查（大多数情况下会在前几次迭代完成）
+        for _ in 0..1000u32 {
+            let hi = c.hcint.extract();
+            if hi.is_set(HCINT::CHHLTD) {
+                c.hcint.set(hi.get());
+                return process_hcint(hi, c, xfersize, dma_off);
+            }
         }
-        if st.is_set(HCINT::AHBERR) {
-            return Err(UsbError::Hardware("AHBERR on isoch"));
+        // 冷路径：完整等待
+        for _ in 0..7_999_000u32 {
+            let hi = c.hcint.extract();
+            if hi.is_set(HCINT::CHHLTD) {
+                c.hcint.set(hi.get());
+                return process_hcint(hi, c, xfersize, dma_off);
+            }
         }
-        if st.any_matching_bits_set(
-            HCINT::FRMOVRN::SET
-                + HCINT::XACTERR::SET
-                + HCINT::BBLERR::SET
-                + HCINT::DATATGLERR::SET
-                + HCINT::NYET::SET
-                + HCINT::NAK::SET,
-        ) {
-            return Ok(0);
-        }
-        if !st.is_set(HCINT::XFERCOMPL) {
-            return Ok(0);
-        }
-        let rem = c.hctsiz.read(HCTSIZ::XFERSIZE);
-        let actual = xfersize.saturating_sub(rem) as usize;
-        if actual > 0 {
-            cache::dcache_invalidate_after_dma(dma::dma_ptr().add(dma_off), actual);
-        }
-        Ok(actual)
+
+        Err(UsbError::Timeout)
     }
 }
 
-/// 批量 Isoch IN：在一次调用中处理多个 uframe，减少函数调用开销。
+/// 处理 HCINT 结果（内联热路径）
+#[inline(always)]
+unsafe fn process_hcint(
+    hi: LocalRegisterCopy<u32, HCINT::Register>,
+    c: &crate::usb::host::dwc2::regs::Dwc2HostChannel,
+    xfersize: u32,
+    dma_off: usize,
+) -> UsbResult<usize> {
+    if hi.is_set(HCINT::STALL) {
+        return Err(UsbError::Stall);
+    }
+    if hi.is_set(HCINT::AHBERR) {
+        return Err(UsbError::Hardware("AHBERR on isoch"));
+    }
+    if hi.any_matching_bits_set(
+        HCINT::FRMOVRN::SET
+            + HCINT::XACTERR::SET
+            + HCINT::BBLERR::SET
+            + HCINT::DATATGLERR::SET
+            + HCINT::NYET::SET
+            + HCINT::NAK::SET,
+    ) {
+        return Ok(0);
+    }
+    if !hi.is_set(HCINT::XFERCOMPL) {
+        return Ok(0);
+    }
+    let rem = c.hctsiz.read(HCTSIZ::XFERSIZE);
+    let actual = xfersize.saturating_sub(rem) as usize;
+    if actual > 0 {
+        cache::dcache_invalidate_after_dma(dma::dma_ptr().add(dma_off), actual);
+    }
+    Ok(actual)
+}
+
+/// 批量 Isoch IN：单缓冲顺序收包（arm → wait → 回调），中断 + WFI 等待。
+#[inline(never)]
 pub fn isoch_in_uframe_batch<F>(
     dev: u32,
     ep: u32,
@@ -102,6 +158,8 @@ pub fn isoch_in_uframe_batch<F>(
 where
     F: FnMut(u32, &[u8]) -> UsbResult<bool>,
 {
+    use super::dma::{DMA_OFF_UFRAME_BUF, UFRAME_BUF_SIZE};
+
     let mps = u32::from(mps_raw & 0x7ff);
     let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
     if mps == 0 || mult == 0 || mult > 3 {
@@ -120,76 +178,72 @@ where
 
     let mut total_uframes = 0u32;
     let mut data_uframes = 0u32;
-    let mut consecutive_empty = 0u32;
 
     unsafe {
-        let hc_base = hcchar_build(dev, ep, mps, HCCHAR::EPTYPE::Isochronous, true, mult.clamp(1, 3));
-        let tsiz =
-            (HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize)).value;
+        let hc_base = hcchar_build(
+            dev,
+            ep,
+            mps,
+            HCCHAR::EPTYPE::Isochronous,
+            true,
+            mult.saturating_sub(1),
+        );
         let c = channel_regs(CH_BULK);
-        let dmap = dma::dma_phys(DMA_OFF_UFRAME_BUF);
 
         channel::ch_wait_disabled(CH_BULK)?;
         channel::ch_halt(CH_BULK);
+        enable_isoch_channel_irq();
 
         c.hcsplt.set(0);
-        let mut oddfrm = {
-            let mut r = LocalRegisterCopy::<u32, HCCHAR::Register>::new(0);
-            if dwc2_regs().hfnum.read(HFNUM::FRNUM) & 1 == 0 {
-                r.modify(HCCHAR::ODDFRM::SET);
-            }
-            r.get()
+
+        let arm = |oddfrm: u32| {
+            c.hcint.set(HCINT_ALL_W1C);
+            c.hctsiz.write(
+                HCTSIZ::PID.val(pid) + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize),
+            );
+            usb_bus_fence_before_dma();
+            c.hcdma.set(dma::dma_phys(DMA_OFF_UFRAME_BUF));
+            usb_bus_fence_before_dma();
+            prepare_isoch_done(c.hctsiz.get());
+            let mut armed = LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc_base | oddfrm);
+            armed.modify(HCCHAR::CHENA::SET);
+            c.hcchar.set(armed.get());
+            armed.get()
         };
+
+        let mut oddfrm = oddfrm_for_current_uframe();
 
         for uframe_idx in 0..max_uframes {
             total_uframes += 1;
 
-            if consecutive_empty > 0 {
-                spin_delay(32.min(consecutive_empty * 2));
-            }
-
-            c.hcint.set(HCINT_ALL_W1C);
-            c.hctsiz.set(tsiz);
-            usb_bus_fence_before_dma();
-            c.hcdma.set(dmap);
-            usb_bus_fence_before_dma();
-            let mut armed = LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc_base | oddfrm);
-            armed.modify(HCCHAR::CHENA::SET);
-            c.hcchar.set(armed.get());
-
-            let st = channel::ch_wait_halted(CH_BULK)?;
-            oddfrm = {
-                let mut r = LocalRegisterCopy::<u32, HCCHAR::Register>::new(0);
-                if dwc2_regs().hfnum.read(HFNUM::FRNUM) & 1 == 0 {
-                    r.modify(HCCHAR::ODDFRM::SET);
+            let _armed_hcchar = arm(oddfrm);
+            let (st, actual) = match wait_isoch_done(16_000) {
+                Ok(done) => done,
+                Err(e) => {
+                    channel::ch_halt(CH_BULK);
+                    return Err(e);
                 }
-                r.get()
             };
+            oddfrm ^= HCCHAR_ODDFRM_BIT;
 
             if st.is_set(HCINT::XFERCOMPL) {
-                let rem = c.hctsiz.read(HCTSIZ::XFERSIZE);
-                let actual = xfersize.saturating_sub(rem) as usize;
+                let actual = actual.min(xfersize) as usize;
                 if actual > 0 {
-                    cache::dcache_invalidate_after_dma(dma::dma_ptr().add(DMA_OFF_UFRAME_BUF), actual);
+                    cache::dcache_invalidate_after_dma(
+                        dma::dma_ptr().add(DMA_OFF_UFRAME_BUF),
+                        actual,
+                    );
                     data_uframes += 1;
-                    consecutive_empty = 0;
                     let slice = dma::dma_rx_slice(DMA_OFF_UFRAME_BUF, actual)
                         .ok_or(UsbError::Hardware("dma view"))?;
                     if callback(uframe_idx, slice)? {
                         break;
                     }
-                } else {
-                    consecutive_empty += 1;
                 }
             } else if st.is_set(HCINT::STALL) {
                 return Err(UsbError::Stall);
             } else if st.is_set(HCINT::AHBERR) {
                 return Err(UsbError::Hardware("AHBERR on isoch"));
-            } else {
-                consecutive_empty += 1;
-                if consecutive_empty > 0 {
-                    spin_delay(32.min(consecutive_empty * 2));
-                }
             }
         }
 
@@ -215,25 +269,21 @@ pub fn isoch_in(dev: u32, ep: u32, mps: u32, len: usize, dma_off: usize) -> UsbR
     unsafe {
         let hc = hcchar_build(dev, ep, mps, HCCHAR::EPTYPE::Isochronous, true, 1);
         let pkts = pktcnt_for(mps, len as u32);
-        let tsiz =
-            (HCTSIZ::PID.val(PID_DATA0) + HCTSIZ::PKTCNT.val(pkts) + HCTSIZ::XFERSIZE.val(len as u32))
-                .value;
 
         let c = channel_regs(CH_BULK);
         channel::ch_wait_disabled(CH_BULK)?;
         channel::ch_halt(CH_BULK);
         c.hcsplt.set(0);
         c.hcint.set(HCINT_ALL_W1C);
-        c.hctsiz.set(tsiz);
+        c.hctsiz.write(
+            HCTSIZ::PID.val(PID_DATA0) + HCTSIZ::PKTCNT.val(pkts) + HCTSIZ::XFERSIZE.val(len as u32),
+        );
         let dmap = dma::dma_phys(dma_off);
         usb_bus_fence_before_dma();
         c.hcdma.set(dmap);
         usb_bus_fence_before_dma();
-        let mut oddfrm_reg = LocalRegisterCopy::<u32, HCCHAR::Register>::new(0);
-        if dwc2_regs().hfnum.read(HFNUM::FRNUM) & 1 == 0 {
-            oddfrm_reg.modify(HCCHAR::ODDFRM::SET);
-        }
-        let mut armed = LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc | oddfrm_reg.get());
+        let mut armed =
+            LocalRegisterCopy::<u32, HCCHAR::Register>::new(hc | oddfrm_for_current_uframe());
         armed.modify(HCCHAR::CHENA::SET);
         c.hcchar.set(armed.get());
 
@@ -242,10 +292,7 @@ pub fn isoch_in(dev: u32, ep: u32, mps: u32, len: usize, dma_off: usize) -> UsbR
             return Err(UsbError::Stall);
         }
         if st.any_matching_bits_set(
-            HCINT::FRMOVRN::SET
-                + HCINT::XACTERR::SET
-                + HCINT::BBLERR::SET
-                + HCINT::NYET::SET,
+            HCINT::FRMOVRN::SET + HCINT::XACTERR::SET + HCINT::BBLERR::SET + HCINT::NYET::SET,
         ) {
             return Ok(0);
         }

@@ -35,3 +35,15 @@ pub fn spin_delay(iterations: u32) {
         core::hint::spin_loop();
     }
 }
+
+/// 等待中断或自旋：RISC-V 上执行 `wfi` 让出 CPU 直至 IRQ 唤醒，其它架构退化为 `spin_loop`。
+#[inline(always)]
+pub fn wait_for_irq_or_spin() {
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("wfi", options(nomem, nostack));
+    }
+
+    #[cfg(not(target_arch = "riscv64"))]
+    core::hint::spin_loop();
+}
