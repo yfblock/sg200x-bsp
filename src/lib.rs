@@ -12,6 +12,7 @@
 //! - `pwm`: PWM 控制驱动
 //! - `usb`: USB 主机栈（DWC2 控制器）+ 类协议（UVC / Mass Storage）
 //! - `ethernet` (feature `ethernet`): 板载 cvitek-eth (DWMAC + 内部 EPHY) 驱动
+//! - `jpu`: JPEG Processing Unit 硬件解码驱动
 //! - `soc`: SoC 外设 MMIO 物理基址常量
 //! - `utils`: 与具体外设无关的内部 helper（D-cache / DMA 一致性、忙等延时等）
 //!
@@ -69,6 +70,7 @@ pub mod dma;
 pub mod ethernet;
 pub mod gpio;
 pub mod i2c;
+pub mod jpu;
 pub mod mp;
 pub mod pinmux;
 pub mod pwm;

@@ -1,9 +1,9 @@
 [package]
 name = "sg200x-bsp"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["yfblock"]
-description = "Board Support Package (BSP) for SG2002/SG200x series chips, providing hardware abstraction layer drivers for pinmux, GPIO, SD/MMC, and TPU"
+description = "Board Support Package (BSP) for SG2002/SG200x series chips, providing hardware abstraction layer drivers for pinmux, GPIO, SD/MMC, JPU, and TPU"
 license = "MIT"
 repository = "https://github.com/yfblock/sg200x-bsp"
 homepage = "https://github.com/yfblock/sg200x-bsp"
@@ -13,7 +13,7 @@ keywords = ["embedded", "sg2002", "bsp", "no-std", "risc-v"]
 categories = ["embedded", "hardware-support", "no-std"]
 
 [dependencies]
-tock-registers = "0.9"
+tock-registers = "0.10"
 bit-struct = "0.3.2"
 log = { version = "0.4", default-features = false }
 

@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "sg200x-bsp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bit-struct",
  "log",
@@ -103,9 +103,9 @@ dependencies = [
 
 [[package]]
 name = "tock-registers"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b9e2fdb3a1e862c0661768b7ed25390811df1947a8acbfbefe09b47078d93c4"
+checksum = "8d2d250f87fb3fb6f225c907cf54381509f47b40b74b1d1f12d2dccbc915bdfe"
 
 [[package]]
 name = "unicode-ident"
