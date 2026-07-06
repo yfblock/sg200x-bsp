@@ -19,6 +19,13 @@ pub use crate::soc::{SD_DRIVER_BASE, TOP_BASE};
 /// 块大小
 pub const BLOCK_SIZE: usize = 0x200;
 
+/// 数据传输失败时的最大重试次数（仅对 SDHCI 错误中断 `IntError` 重试）。
+///
+/// PIO 读路径在偶发 data CRC / 命令线错误上会返回 `IntError`；重试前会先
+/// 软复位数据/命令线，再重新下发命令。Linux 的 SD 驱动靠重试+DMA 容忍这类
+/// 瞬时错误，这里对齐该策略。
+pub const XFER_RETRY: u32 = 5;
+
 // ============================================================================
 // 寄存器位域定义 (使用 tock-registers)
 // ============================================================================
@@ -29,6 +36,15 @@ register_bitfields! [
     /// SDMA 系统地址 / 参数寄存器 (偏移 0x00)
     pub SDMA_SYS_ADDR [
         /// SDMA 系统地址 / 参数
+        ADDR OFFSET(0) NUMBITS(32) []
+    ],
+
+    /// ADMA2 系统地址寄存器 (偏移 0x58 低 32 位 / 0x5C 高 32 位)
+    ///
+    /// 存放 ADMA2 描述符表的物理基址。32 位 ADMA2 只使用低 32 位，
+    /// 高 32 位需写 0。
+    pub ADMA_SYS_ADDR [
+        /// ADMA2 描述符表地址
         ADDR OFFSET(0) NUMBITS(32) []
     ],
 
@@ -591,8 +607,17 @@ register_structs! {
         /// 能力寄存器 2 (偏移 0x44)
         (0x044 => pub capabilities2: ReadWrite<u32, CAPABILITIES2::Register>),
 
-        /// 保留 (偏移 0x48-0x1FC)
+        /// 保留 (偏移 0x48-0x54)
         (0x048 => _reserved0),
+
+        /// ADMA2 系统地址寄存器 低 32 位 (偏移 0x58)
+        (0x058 => pub adma_sys_addr_low: ReadWrite<u32, ADMA_SYS_ADDR::Register>),
+
+        /// ADMA2 系统地址寄存器 高 32 位 (偏移 0x5C, 32 位 ADMA2 写 0)
+        (0x05C => pub adma_sys_addr_high: ReadWrite<u32, ADMA_SYS_ADDR::Register>),
+
+        /// 保留 (偏移 0x60-0x1FC)
+        (0x060 => _reserved1),
 
         /// eMMC 控制寄存器 (偏移 0x200)
         (0x200 => pub emmc_ctl: ReadWrite<u32, EMMC_CTL::Register>),
