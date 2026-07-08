@@ -263,4 +263,28 @@ impl Sdmmc {
             self.regs.clk_ctl.modify(CLK_CTL::SD_CLK_EN::CLEAR);
         }
     }
+
+    /// 使能传输完成 + 错误中断信号（用于 ADMA2 中断驱动完成）。
+    pub fn enable_xfer_irq(&self) {
+        // 先清除所有中断状态
+        self.regs.norm_and_err_int_sts.set(0xF3FFFFFF);
+        // 使能 XFER_CMPL 和 ERR_INT 的状态位
+        self.regs.norm_and_err_int_sts_en.modify(
+            NORM_AND_ERR_INT_STS_EN::XFER_CMPL_EN::SET,
+        );
+        // 使能中断信号输出到 CPU
+        self.regs.norm_and_err_int_sig_en.modify(
+            NORM_AND_ERR_INT_SIG_EN::XFER_CMPL_SIG_EN::SET,
+        );
+    }
+
+    /// 禁用所有中断信号。
+    pub fn disable_xfer_irq(&self) {
+        self.regs.norm_and_err_int_sig_en.set(0);
+    }
+
+    /// 返回 SDMMC 寄存器基址（虚拟地址），供 IRQ handler 直接访问。
+    pub fn regs_base(&self) -> usize {
+        self.regs as *const _ as usize
+    }
 }
