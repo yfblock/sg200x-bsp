@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use tock_registers::{
+    fields::FieldValue,
     interfaces::{Readable, Writeable},
     register_bitfields, register_structs,
     registers::{ReadOnly, ReadWrite},
@@ -62,6 +63,22 @@ register_bitfields! [
         WIDTH OFFSET(16) NUMBITS(16) [],
     ],
 
+    pub MJPEG_SCL_INFO [
+        ENABLE OFFSET(4) NUMBITS(1) [],
+        HORIZONTAL_MODE OFFSET(2) NUMBITS(2) [
+            Full = 0,
+            Half = 1,
+            Quarter = 2,
+            Eighth = 3
+        ],
+        VERTICAL_MODE OFFSET(0) NUMBITS(2) [
+            Full = 0,
+            Half = 1,
+            Quarter = 2,
+            Eighth = 3
+        ],
+    ],
+
     pub MJPEG_BBC_STRM_CTRL [
         PAGES OFFSET(0) NUMBITS(31) [],
         END_FLAG OFFSET(31) NUMBITS(1) [],
@@ -90,7 +107,7 @@ register_structs! {
         (0x014 => pub pic_size: ReadWrite<u32, MJPEG_PIC_SIZE::Register>),
         (0x018 => pub mcu_info: ReadWrite<u32, VALUE32::Register>),
         (0x01C => pub rot_info: ReadWrite<u32, VALUE32::Register>),
-        (0x020 => pub scl_info: ReadWrite<u32, VALUE32::Register>),
+        (0x020 => pub scl_info: ReadWrite<u32, MJPEG_SCL_INFO::Register>),
         (0x024 => _reserved_if_info),
         (0x028 => pub clp_info: ReadWrite<u32, VALUE32::Register>),
         (0x02C => pub op_info: ReadWrite<u32, VALUE32::Register>),
@@ -181,8 +198,12 @@ fn mmio_modify32(addr: usize, update: impl FnOnce(u32) -> u32) {
 /// TOP JPEG 时钟、复位、DDR remap 与 VC 子块使能，并完成 JPU 软复位。
 pub fn hardware_init_at(jpu_base: usize, top_base: usize, vc_base: usize) {
     mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
-    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
-    mmio_modify32(top_base + TOP_DDR_ADDR_MODE_OFF, |v| v | TOP_DDR_VD_REMAP_BIT);
+    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| {
+        v | TOP_RST_JPEG_RELEASE_BIT
+    });
+    mmio_modify32(top_base + TOP_DDR_ADDR_MODE_OFF, |v| {
+        v | TOP_DDR_VD_REMAP_BIT
+    });
     mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
     let _ = mmio_read32(vc_base);
 
@@ -218,6 +239,34 @@ pub fn wait_sw_reset_done_at(jpu_base: usize) {
             return;
         }
         core::hint::spin_loop();
+    }
+}
+
+/// Encode one isotropic scale mode for `MJPEG_SCL_INFO`.
+pub(crate) fn scl_info_value(
+    scale: super::layout::JpuScale,
+) -> FieldValue<u32, MJPEG_SCL_INFO::Register> {
+    match scale {
+        super::layout::JpuScale::Full => {
+            MJPEG_SCL_INFO::ENABLE::CLEAR
+                + MJPEG_SCL_INFO::HORIZONTAL_MODE::Full
+                + MJPEG_SCL_INFO::VERTICAL_MODE::Full
+        }
+        super::layout::JpuScale::Half => {
+            MJPEG_SCL_INFO::ENABLE::SET
+                + MJPEG_SCL_INFO::HORIZONTAL_MODE::Half
+                + MJPEG_SCL_INFO::VERTICAL_MODE::Half
+        }
+        super::layout::JpuScale::Quarter => {
+            MJPEG_SCL_INFO::ENABLE::SET
+                + MJPEG_SCL_INFO::HORIZONTAL_MODE::Quarter
+                + MJPEG_SCL_INFO::VERTICAL_MODE::Quarter
+        }
+        super::layout::JpuScale::Eighth => {
+            MJPEG_SCL_INFO::ENABLE::SET
+                + MJPEG_SCL_INFO::HORIZONTAL_MODE::Eighth
+                + MJPEG_SCL_INFO::VERTICAL_MODE::Eighth
+        }
     }
 }
 
@@ -262,3 +311,23 @@ pub const HUFF_ADDR_PTR: u32 = 0x880;
 pub const QMAT_PHASE_Y: u32 = 0x03;
 pub const QMAT_PHASE_CB: u32 = 0x43;
 pub const QMAT_PHASE_CR: u32 = 0x83;
+
+#[cfg(test)]
+mod tests {
+    use super::scl_info_value;
+    use crate::jpu::JpuScale;
+
+    #[test]
+    fn scale_info_encoding_matches_the_documented_hardware_modes() {
+        let cases = [
+            (JpuScale::Full, 0x00),
+            (JpuScale::Half, 0x15),
+            (JpuScale::Quarter, 0x1a),
+            (JpuScale::Eighth, 0x1f),
+        ];
+
+        for (scale, expected) in cases {
+            assert_eq!(u32::from(scl_info_value(scale)), expected);
+        }
+    }
+}

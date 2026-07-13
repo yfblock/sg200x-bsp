@@ -1,6 +1,6 @@
 //! JPEG 头解析（SOF / DHT / DQT / SOS）。
 
-use super::regs::{FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444};
+use super::regs::{FORMAT_224, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_444};
 
 pub struct JpegHeaderInfo {
     pub width: u32,
@@ -40,19 +40,11 @@ impl HuffTable {
     }
 
     pub fn sign_extend_16(huff_data: u32) -> u32 {
-        if huff_data & 0x8000 != 0 {
-            0xFFFF
-        } else {
-            0
-        }
+        if huff_data & 0x8000 != 0 { 0xFFFF } else { 0 }
     }
 
     pub fn sign_extend_8(huff_data: u32) -> u32 {
-        if huff_data & 0x80 != 0 {
-            0xFFFFFF
-        } else {
-            0
-        }
+        if huff_data & 0x80 != 0 { 0xFFFFFF } else { 0 }
     }
 
     pub fn generate(&mut self) {
@@ -106,7 +98,12 @@ impl JpegHeaderInfo {
             dc_huff_tbl: [0; 3],
             ac_huff_tbl: [0; 3],
             quant_tbl: [0; 3],
-            huff_tables: [HuffTable::new(), HuffTable::new(), HuffTable::new(), HuffTable::new()],
+            huff_tables: [
+                HuffTable::new(),
+                HuffTable::new(),
+                HuffTable::new(),
+                HuffTable::new(),
+            ],
             quant_tables: [
                 QuantTable::new(),
                 QuantTable::new(),
@@ -204,7 +201,17 @@ pub fn parse_jpeg_header(data: &[u8]) -> Result<JpegHeaderInfo, &'static str> {
                             }
                         }
 
-                        header_info.ecs_offset = i + 2 + sos_length;
+                        let ecs_offset = i
+                            .checked_add(2)
+                            .and_then(|offset| offset.checked_add(sos_length))
+                            .ok_or("SOS offset overflow")?;
+                        if ecs_offset > data.len() {
+                            return Err("SOS payload exceeds JPEG stream");
+                        }
+                        if ecs_offset == data.len() {
+                            return Err("SOS has no entropy-coded data");
+                        }
+                        header_info.ecs_offset = ecs_offset;
                         return Ok(header_info);
                     }
                 }
@@ -311,7 +318,8 @@ fn parse_dqt(
         } else {
             for j in 0..64 {
                 if offset + 1 + j * 2 + 1 < data.len() {
-                    header_info.quant_tables[tq].values[j] = ((data[offset + 1 + j * 2] as u16) << 8)
+                    header_info.quant_tables[tq].values[j] = ((data[offset + 1 + j * 2] as u16)
+                        << 8)
                         | (data[offset + 1 + j * 2 + 1] as u16);
                 }
             }
@@ -324,4 +332,29 @@ fn parse_dqt(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_jpeg_header;
+
+    #[test]
+    fn rejects_sos_payload_that_ends_beyond_the_input() {
+        let malformed = [0xff, 0xda, 0xff, 0xff];
+
+        assert_eq!(
+            parse_jpeg_header(&malformed).err(),
+            Some("SOS payload exceeds JPEG stream")
+        );
+    }
+
+    #[test]
+    fn rejects_sos_without_any_entropy_coded_byte() {
+        let no_entropy_data = [0xff, 0xda, 0x00, 0x02];
+
+        assert_eq!(
+            parse_jpeg_header(&no_entropy_data).err(),
+            Some("SOS has no entropy-coded data")
+        );
+    }
 }
