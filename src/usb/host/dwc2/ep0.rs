@@ -168,6 +168,16 @@ fn ch_halt(ch: u32) {
     }
 }
 
+/// 强制停止某条主机通道（对外公开，供 [`super::controller::abort_bulk_channel`] 等
+/// 错误恢复路径复用）。若通道未使能则空操作；否则按 `dwc2_hc_halt` 置 `CHENA|CHDIS`
+/// 等待 `CHENA` 自清。
+///
+/// # 参数
+/// - `ch`：主机通道索引（本栈 0=EP0 控制、1=Bulk/Isoch）。
+pub fn abort_channel(ch: u32) {
+    ch_halt(ch);
+}
+
 fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
     let c = channel(ch);
     for _ in 0..8_000_000u32 {

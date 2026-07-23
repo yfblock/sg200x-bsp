@@ -13,9 +13,10 @@ pub mod controller;
 pub mod ep0;
 
 pub use controller::{
-    debug_dump_root_port_hw, dwc2_host_init, dwc2_host_root_bus_reset_pulse, dwc2_hprt0_read,
+    abort_bulk_channel, clear_port_connect_detect, debug_dump_root_port_hw,
+    disable_root_port, dwc2_host_init, dwc2_host_root_bus_reset_pulse, dwc2_hprt0_read,
     dwc2_probe, hprt_connsts, hprt_enabled, hprt_lnsts, hprt_pwr, hprt_speed_bits,
-    suggested_bulk_mps,
+    root_port_connected, suggested_bulk_mps,
 };
 
 pub use ep0::{

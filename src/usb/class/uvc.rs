@@ -195,6 +195,63 @@ pub struct UvcStreamSelection {
     pub isoch_alts: [(u8, u16); 8],
 }
 
+/// 根据 `PREFERRED_FRAME_INTERVAL` 从某 frame 描述符的可用 interval 集合中选最接近的值。
+///
+/// 返回 0 表示未设偏好（调用方沿用 `min_ival`）。`i` 为该 VS_FRAME 描述符在 `cfg` 中的起始
+/// 偏移，`bl` 为其 `bLength`；`ival_type`>0 为离散列表（其后跟 `ival_type` 个 u32），
+/// `ival_type==0` 为连续区间（`dwMinFrameInterval`@26 / `dwMaxFrameInterval`@30）。
+fn choose_frame_interval(
+    cfg: &[u8],
+    i: usize,
+    bl: usize,
+    dflt_ival: u32,
+    _min_ival: u32,
+    ival_type: u8,
+) -> u32 {
+    let pref = PREFERRED_FRAME_INTERVAL.load(core::sync::atomic::Ordering::Relaxed);
+    if pref == 0 {
+        return 0;
+    }
+    let best_for = |v: u32, cur_best: Option<u32>| -> Option<u32> {
+        if v == 0 {
+            return cur_best;
+        }
+        match cur_best {
+            None => Some(v),
+            Some(b) => {
+                let d_new = if v >= pref { v - pref } else { pref - v };
+                let d_old = if b >= pref { b - pref } else { pref - b };
+                if d_new < d_old { Some(v) } else { Some(b) }
+            }
+        }
+    };
+    let mut best: Option<u32> = None;
+    if ival_type == 0 {
+        if bl >= 38 {
+            let lo = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
+            let hi = u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
+            if lo > 0 && hi > 0 {
+                let v = pref.clamp(lo, hi);
+                best = best_for(v, best);
+            }
+        }
+        best = best_for(dflt_ival, best);
+    } else {
+        let n = ival_type as usize;
+        let mut p = i + 26;
+        for _ in 0..n {
+            if p + 4 > i + bl {
+                break;
+            }
+            let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
+            best = best_for(v, best);
+            p += 4;
+        }
+        best = best_for(dflt_ival, best);
+    }
+    best.unwrap_or(0)
+}
+
 /// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
 pub fn read_configuration_descriptor(dev: u32, ep0_mps: u32, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
@@ -320,7 +377,10 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                     w, h,
                     fps_x100 / 100, fps_x100 % 100,
                     fps_min_x100 / 100, fps_min_x100 % 100);
-                let dflt_ival = if min_ival > 0 { min_ival } else { dflt_ival };
+                // 选定本 frame 描述符实际使用的 interval：
+                // 设了 PREFERRED_FRAME_INTERVAL 时选最接近它的可用值；否则沿用最小（最高 fps）。
+                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, min_ival, ival_type);
+                let dflt_ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
                 let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
                 let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG
                     || st == VS_FRAME_MJPEG;
@@ -328,6 +388,23 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                     let w = pw as i32;
                     let h = ph as i32;
                     let area = w * h;
+                    // ① 精确尺寸优先：set_preferred_frame_size 设过后，精确匹配得最高分。
+                    let pref_w = PREFERRED_FRAME_W.load(core::sync::atomic::Ordering::Relaxed);
+                    let pref_h = PREFERRED_FRAME_H.load(core::sync::atomic::Ordering::Relaxed);
+                    if pref_w != 0 && pref_h != 0 {
+                        let pw_i = pref_w as i32;
+                        let ph_i = pref_h as i32;
+                        if w == pw_i && h == ph_i {
+                            return 2_000_000;
+                        }
+                        let pref_area = pw_i.saturating_mul(ph_i);
+                        // 非精确匹配：≤ pref_area 越接近越好；> pref_area 倒扣。
+                        return if area <= pref_area {
+                            pref_area - area
+                        } else {
+                            -(area - pref_area)
+                        };
+                    }
                     let pref_max =
                         PREFERRED_MAX_PIXELS.load(core::sync::atomic::Ordering::Relaxed) as i32;
                     if pref_max > 0 {
@@ -1020,6 +1097,47 @@ pub fn uvc_stop_streaming(dev: u32, ep0_mps: u32, vs_if: u8) -> UsbResult<()> {
     dwc2_ep0::ep0_control_write_no_data(dev, setup::set_interface(0, vs_if), ep0_mps)
 }
 
+/// 错误恢复：停止当前流后重新 PROBE/COMMIT/SET_INTERFACE。
+///
+/// 抓帧出现可重试错误（超时 / NAK 耗尽 / 单包 0 字节）后调用——先 `uvc_stop_streaming`
+/// 把 VS 接口切回 alt=0，再走 [`uvc_start_video_stream`] 的完整协商。`uvc_start_video_stream`
+/// 内部已 `reset_frame_continuity()` 并先 `SET_INTERFACE(0)`，故本函数等价于"重协商"。
+///
+/// # 参数
+/// - `dev`：设备 USB 地址。
+/// - `ep0_mps`：EP0 最大包长。
+/// - `sel`：流参数（mut；协商后会更新 `negotiated_payload_size` / `negotiated_frame_size`
+///   及 Isoch alt）。
+pub fn uvc_restart_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelection) -> UsbResult<()> {
+    let _ = uvc_stop_streaming(dev, ep0_mps, sel.vs_interface);
+    uvc_start_video_stream(dev, ep0_mps, sel)
+}
+
+/// 单次抓帧的健康度分类，供会话层 [`crate::usb::class::uvc_session`] 决定恢复策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureHealth {
+    /// 抓到完整帧。
+    Ok,
+    /// 可重试的瞬时错误（超时、NAK 耗尽、单包 0 字节）：重协商后多半能恢复。
+    Transient,
+    /// 致命错误（STALL / AHBERR / 硬件错误）：须重枚举设备。
+    Fatal,
+}
+
+impl CaptureHealth {
+    /// 把 [`UsbError`] 映射成健康度（`Ok` 不由此产生）。
+    #[inline]
+    pub fn from_err(e: UsbError) -> Self {
+        match e {
+            UsbError::Timeout | UsbError::Nak => CaptureHealth::Transient,
+            UsbError::Protocol(_) => CaptureHealth::Transient,
+            UsbError::Stall | UsbError::Hardware(_) | UsbError::NotImplemented => {
+                CaptureHealth::Fatal
+            }
+        }
+    }
+}
+
 #[inline]
 fn uvc_payload_header_len(data: &[u8]) -> Option<usize> {
     if data.is_empty() {
@@ -1200,6 +1318,38 @@ pub fn set_preferred_max_pixels(p: u32) {
     PREFERRED_MAX_PIXELS.store(p, core::sync::atomic::Ordering::Relaxed);
 }
 
+/// 上层可设置"首选精确帧尺寸"（宽）。与 [`PREFERRED_FRAME_H`] 同时非 0 时，
+/// [`parse_uvc_video_stream`] 的 `rank()` 对精确匹配该尺寸的 frame 给最高分。
+/// 0 表示不启用精确尺寸偏好（退回 [`PREFERRED_MAX_PIXELS`] 逻辑）。
+///
+/// 典型：JPU 1 MiB DMA pool 把可硬件解码的分辨率限制在 ~640×480，超出会
+/// `jpu_alloc` 失败；故 camera+JPU 路径应 `set_preferred_frame_size(640, 480)`。
+pub static PREFERRED_FRAME_W: core::sync::atomic::AtomicU16 =
+    core::sync::atomic::AtomicU16::new(0);
+/// 首选精确帧尺寸（高），见 [`PREFERRED_FRAME_W`]。
+pub static PREFERRED_FRAME_H: core::sync::atomic::AtomicU16 =
+    core::sync::atomic::AtomicU16::new(0);
+
+/// 设置首选精确帧尺寸。必须在 [`parse_uvc_video_stream`] 之前调用。
+/// `(0, 0)` 关闭精确尺寸偏好。
+pub fn set_preferred_frame_size(w: u16, h: u16) {
+    PREFERRED_FRAME_W.store(w, core::sync::atomic::Ordering::Relaxed);
+    PREFERRED_FRAME_H.store(h, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 上层可设置"首选帧间隔"（100ns 单位，UVC `dwFrameInterval`）。非 0 时
+/// [`parse_uvc_video_stream`] 对每个 frame 描述符从其可用 interval 集合中选**最接近**
+/// 此值的那个（而非默认的最小间隔=最高 fps）。0 表示沿用最小间隔。
+///
+/// 典型：`333_333` ≈ 30 fps。30fps 常给廉价 webcam 更多曝光/ISP 余量。
+pub static PREFERRED_FRAME_INTERVAL: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// 设置 [`PREFERRED_FRAME_INTERVAL`]。必须在 [`parse_uvc_video_stream`] 之前调用。
+pub fn set_preferred_frame_interval(iv: u32) {
+    PREFERRED_FRAME_INTERVAL.store(iv, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// 抓一帧（视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`]）。
 ///
 /// **关键**：等时模式下 `mult=1` 时，每次 `isoch_in_uframe` 返回的整个数据（最多 mps 字节）就是
@@ -1237,6 +1387,7 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
             loop {
                 let actual = dwc2_ep0::bulk_in(dev, ep, maxp, pid, chunk, work_off)?;
                 if actual == 0 {
+                    log::warn!("UVC: bulk IN 0 bytes (transfers={transfers})");
                     return Err(UsbError::Protocol("bulk IN 0 bytes"));
                 }
                 transfers = transfers.wrapping_add(1);
@@ -1254,6 +1405,7 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
                     return Ok(jpeg_len);
                 }
                 if transfers > 60_000 {
+                    log::warn!("UVC: bulk capture timeout after {transfers} transfers (jpeg_len={jpeg_len})");
                     return Err(UsbError::Timeout);
                 }
             }

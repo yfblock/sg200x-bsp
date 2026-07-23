@@ -317,6 +317,50 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     Ok(())
 }
 
+// --- 热拔插 / 错误恢复用的根口原语 ---
+
+/// 根口是否检测到设备连接（`HPRT0.CONNSTS`，bit0）。
+///
+/// 供热拔插轮询与抓帧失败后判断"设备是否还在"。基址未设置时返回 `false`。
+#[inline]
+pub fn root_port_connected() -> bool {
+    if base() == 0 {
+        return false;
+    }
+    hprt_connsts(regs().hprt0.get())
+}
+
+/// 写 1 清除 `HPRT0.CONNDET`（连接变化位），不触碰其它 W1C 位（ENA/ENACHG/OVRCURCHG）。
+///
+/// 热拔插检测后应清掉该位，避免下一次 RMW 把它当成新写入。基址未设置时空操作。
+pub fn clear_port_connect_detect() {
+    if base() == 0 {
+        return;
+    }
+    let r = regs();
+    let cur = r.hprt0.get();
+    if cur & (1 << 1) != 0 {
+        r.hprt0.set((cur & !HPRT0_W1C_MASK) | (1 << 1));
+    }
+}
+
+/// 失能根口：清 `PWR` 并写 1 清 `ENA`（W1C，写 1 = disable port）。
+///
+/// 用于拔插后 / 重枚举前的干净 teardown——把端口彻底关掉，等下一次 `dwc2_host_init`
+/// 重新上电 + bus reset。**必须** mask 掉所有 W1C 位后再写，否则会误清 ENA/ENACHG 等。
+/// 基址未设置时空操作。
+pub fn disable_root_port() {
+    if base() == 0 {
+        return;
+    }
+    let r = regs();
+    // 清 CONNDET/ENACHG/OVRCURCHG（W1C），同时清 PWR；ENA 是 W1C，写 1 = disable。
+    // HPRT0_W1C_MASK 已含 ENA(2)、CONNDET(1)、ENACHG(3)、OVRCURCHG(5)。
+    let cur = r.hprt0.get();
+    // 先把所有 W1C 位写 1 清掉，再清 PWR 位（bit12）。
+    r.hprt0.set((cur | HPRT0_W1C_MASK) & !(1 << 12));
+}
+
 /// 打印根口与片内 PHY 快照（`CONNSTS==0` 时排障用）。
 ///
 /// # 参数
@@ -385,6 +429,28 @@ fn flush_tx_fifo_host_all() -> UsbResult<()> {
     wait_grstctl_handshake(GRSTCTL::TXFFLSH, false)?;
     spin_delay(2_000);
     Ok(())
+}
+
+/// 强制中止 Bulk/Isoch 通道（CH_BULK）并 flush RX/TX FIFO。
+///
+/// 抓帧超时 / 反复 XACTERR 时调用，把可能挂起的 DMA 事务收掉、清掉残留 PID/状态，
+/// 再重试或重协商，避免上一轮传输残留干扰下一轮。对齐 sdmmc `reset_dat_cmd_lines()`
+/// 「只复位受影响通道、不整机重置」的粒度。
+///
+/// 仅 `cv182x-host`（SG2002 实机路径）下做 FIFO flush；非该 feature 时只做通道 halt。
+pub fn abort_bulk_channel() {
+    // CH_BULK = 1（见 ep0.rs）。halt 已自带「置 CHENA|CHDIS 等待 CHENA 清」。
+    // 这里复用 ep0 的 ch_halt 而非手写，保证与传输路径同一套停止语义。
+    crate::usb::host::dwc2::ep0::abort_channel(1);
+    #[cfg(feature = "cv182x-host")]
+    {
+        let _ = flush_rx_fifo_host();
+        let _ = flush_tx_fifo_host_all();
+    }
+    #[cfg(not(feature = "cv182x-host"))]
+    {
+        // 非 cv182x 路径无 FIFO flush helper；通道 halt 已足够清理 CH_BULK 状态。
+    }
 }
 
 #[cfg(feature = "cv182x-host")]
