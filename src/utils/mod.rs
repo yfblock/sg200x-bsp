@@ -4,10 +4,12 @@
 //!
 //! - [`cache`]：CPU D-cache 与 DMA 一致性维护（T-Head C906 / AArch64）。
 //! - [`delay`]：忙等延时（NOP 循环）。
+//! - [`time`]：基于 `rdtime` 的时间基准与超时判定（外设等待循环应按时间而非次数设上限）。
 //!
 //! 外部使用者一般通过 `crate::utils::cache::*` 或 [`crate::utils::delay`] 直接拿到所需 API。
 
 pub mod cache;
 pub mod delay;
+pub mod time;
 
 pub use delay::{delay, delay_long, delay_short};

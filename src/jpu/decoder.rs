@@ -11,6 +11,7 @@ use super::regs::{
 };
 use crate::soc::TOP_BASE;
 use crate::utils::cache::{dcache_clean_range, dcache_invalidate_range};
+use crate::utils::time::Deadline;
 use tock_registers::interfaces::{Readable, Writeable};
 
 /// 解码结果：YUV420 planar，数据位于 DMA 帧缓冲（至下次 decode/Drop 有效）。
@@ -195,25 +196,42 @@ impl JpuDecoder {
         Ok(())
     }
 
+    /// JPU 挂死/解码出错后的硬件恢复：给 JPEG 块一次真正的复位脉冲。
+    ///
+    /// 光靠软复位（START_INIT）或重跑 `hardware_init_*` 都救不回来——后者只
+    /// "释放"复位位，对已在运行的块是空操作。详见 [`regs::hard_reset_at`]。
+    pub fn recover(&mut self) {
+        super::regs::hard_reset_at(self.mmio.jpu_base, self.mmio.top_base, self.mmio.vc_base);
+    }
+
     pub fn decode(&mut self, jpeg_data: &[u8]) -> Result<DecodeResult, &'static str> {
+        use super::trace::{mark, step};
+        mark(step::ENTER);
         if !self.initialized {
             return Err("JPU not initialized");
         }
 
         let header_info = parse_jpeg_header(jpeg_data)?;
+        mark(step::PARSE_HEADER);
 
         let copy_len = jpeg_data.len().min(self.stream_buf.size);
         copy_to_phys(self.stream_buf, &jpeg_data[..copy_len]);
+        mark(step::COPY_STREAM);
         dcache_clean_range(self.stream_buf.addr, copy_len);
+        mark(step::CLEAN_STREAM);
 
         let (frame_size, layout) = frame_layout(&header_info)?;
+        mark(step::FRAME_LAYOUT);
 
         if !self.frame_buf.is_empty() {
             jpu_free(self.frame_buf);
             self.frame_buf = PhysBuffer { addr: 0, size: 0 };
         }
+        mark(step::FREE_FRAME);
         self.frame_buf = jpu_alloc(frame_size).ok_or("Failed to alloc frame buf")?;
+        mark(step::ALLOC_FRAME);
         dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        mark(step::INV_FRAME);
 
         configure_stream_regs(
             self.mmio.jpu_base,
@@ -223,26 +241,39 @@ impl JpuDecoder {
             &header_info,
             layout,
         );
+        mark(step::CFG_STREAM_REGS);
 
         upload_huff_tables(self.mmio.jpu_base, &header_info)?;
+        mark(step::HUFF);
         upload_quant_tables(self.mmio.jpu_base, &header_info)?;
+        mark(step::QUANT);
 
         let stream_dma = (self.dma_to_phys)(self.stream_buf.addr);
         gram_setup(self.mmio.jpu_base, stream_dma, &header_info)?;
+        mark(step::GRAM);
 
         let frame_dma = (self.dma_to_phys)(self.frame_buf.addr);
         start_decode(self.mmio.jpu_base, frame_dma, &header_info, layout)?;
+        mark(step::START_DECODE);
 
-        poll_decode_done(self.mmio.jpu_base)?;
+        if let Err(e) = poll_decode_done(self.mmio.jpu_base) {
+            // 挂死/出错后必须真正复位 JPEG 块，否则后续每帧都会再等满一个超时。
+            self.recover();
+            return Err(e);
+        }
+        mark(step::POLL);
 
         dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        mark(step::INV_AFTER);
 
-        Ok(DecodeResult {
+        let r = DecodeResult {
             width: header_info.width,
             height: header_info.height,
             yuv_data: phys_slice(self.frame_buf.addr, frame_size),
             yuv_phys_addr: self.frame_buf.addr,
-        })
+        };
+        mark(step::DONE);
+        Ok(r)
     }
 }
 
@@ -525,10 +556,20 @@ fn start_decode(
     Ok(())
 }
 
+/// 单帧解码的等待上限。640×480 baseline MJPEG 正常 1~5ms 完成，200ms 已极宽松。
+///
+/// **必须按时间而非轮询次数判定**：原来只有 `MAX_POLLS` 次数上限，而每轮内层
+/// 1000 次 `spin_loop` 在小核 C906L 上要 ~461us（实测 ~2168 轮/秒），500k 轮实际
+/// 要 **230 秒**才超时。JPU 一挂，小核就被这个循环堵 230 秒，`frame_count` 冻结，
+/// 外部看起来像彻底死机——而不是预期的"2 秒后超时并复位"。
+const DECODE_TIMEOUT_MS: u64 = 200;
+/// 次数兜底：仅在没有 `rdtime`（非 riscv64）时生效。
+const MAX_POLLS: u32 = 500_000;
+
 fn poll_decode_done(jpu_base: usize) -> Result<(), &'static str> {
     let mut count = 0u32;
-    const MAX_POLLS: u32 = 500_000;
     let r = jpu_regs_at(jpu_base);
+    let deadline = Deadline::after_ms(DECODE_TIMEOUT_MS);
 
     loop {
         if r.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
@@ -548,12 +589,14 @@ fn poll_decode_done(jpu_base: usize) -> Result<(), &'static str> {
             return Err("JPU decode error");
         }
 
-        for _ in 0..1000 {
+        // 轮询间隔别太大：这里每轮的开销直接决定超时判定的粒度。
+        for _ in 0..64 {
             core::hint::spin_loop();
         }
         count += 1;
+        super::trace::mark_poll(count);
 
-        if count >= MAX_POLLS {
+        if deadline.expired() || count >= MAX_POLLS {
             let status = r.pic_status.get();
             log::warn!("[JPU] Timeout! status=0x{:x}, polls={}", status, count);
             return Err("JPU decode timeout");

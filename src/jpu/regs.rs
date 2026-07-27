@@ -9,6 +9,7 @@ use tock_registers::{
 };
 
 use crate::soc::TOP_BASE;
+use crate::utils::time::Deadline;
 
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
 pub const VC_REG_BASE: usize = 0x0B03_0000;
@@ -215,6 +216,41 @@ pub fn hardware_init_at_no_vd_remap(jpu_base: usize, top_base: usize, vc_base: u
     wait_sw_reset_done_at(jpu_base);
 }
 
+/// 给 JPEG 块打一次**真正的复位脉冲**，然后重新初始化（不含 VD_REMAP / DDR mode）。
+///
+/// 为什么需要它：`hardware_init_at*` 里只有 `v | TOP_RST_JPEG_RELEASE_BIT`，
+/// 也就是只"释放"复位——对一个已经在跑（或已经挂死）的块是**空操作**，
+/// 从来没有把复位真正拉低过。所以 JPU 挂死后，无论重跑 `hardware_init_*`
+/// 还是重建整个 `JpuDecoder`，硬件状态都不会被清掉（实测挂死后连续 280+ 帧
+/// 全部超时失败）。必须 assert → 等待 → deassert 才能把块拉回干净状态。
+///
+/// 只动 JPEG 的时钟/复位位和 VC 使能，**不写** `TOP_DDR_ADDR_MODE_OFF`
+/// （那会改 DDR 地址映射把大核搞崩）。
+pub fn hard_reset_at(jpu_base: usize, top_base: usize, vc_base: usize) {
+    // 1) 拉低复位（清 release 位）
+    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v & !TOP_RST_JPEG_RELEASE_BIT);
+    let _ = mmio_read32(top_base + TOP_RST_JPEG_OFF);
+    // 2) 保持一段复位时间
+    crate::utils::time::spin_ms(1);
+    // 3) 时钟使能后再释放复位
+    mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
+    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
+    let _ = mmio_read32(top_base + TOP_RST_JPEG_OFF);
+    crate::utils::time::spin_ms(1);
+    // 4) 重新使能 VC 块并做一次 warm-up + 软复位
+    mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
+    let _ = mmio_read32(vc_base);
+
+    let regs = jpu_regs_at(jpu_base);
+    clear_pic_status_at(jpu_base, regs.pic_status.get());
+    regs.bbc_bas_addr
+        .write(VALUE32::VAL.val(JPU_WARMUP_BBC_BASE));
+    let _ = regs.bbc_bas_addr.get();
+
+    wait_bbc_idle_at(jpu_base);
+    wait_sw_reset_done_at(jpu_base);
+}
+
 /// 默认物理基址 bring-up。
 pub fn hardware_init() {
     hardware_init_at(JPU_REG_BASE, TOP_BASE, VC_REG_BASE);
@@ -230,14 +266,19 @@ pub fn clear_pic_status(status: u32) {
     clear_pic_status_at(JPU_REG_BASE, status);
 }
 
+/// 等待软复位完成。按时间设上限（10ms 足够）——次数上限的实际时长取决于主频
+/// 和循环开销，在小核上会长到不可接受，见 [`crate::utils::time`]。
 pub fn wait_sw_reset_done_at(jpu_base: usize) {
     let regs = jpu_regs_at(jpu_base);
     regs.pic_start.write(MJPEG_PIC_START::START_INIT::SET);
-    for _ in 0..100_000 {
+    let dl = Deadline::after_ms(10);
+    let mut n = 0u32;
+    while n < 100_000 && !dl.expired() {
         if !regs.pic_start.is_set(MJPEG_PIC_START::START_INIT) {
             return;
         }
         core::hint::spin_loop();
+        n += 1;
     }
 }
 
@@ -245,13 +286,17 @@ pub fn wait_sw_reset_done() {
     wait_sw_reset_done_at(JPU_REG_BASE);
 }
 
+/// 等待 BBC 空闲。同上，按时间设上限。
 pub fn wait_bbc_idle_at(jpu_base: usize) {
     let regs = jpu_regs_at(jpu_base);
-    for _ in 0..100_000 {
+    let dl = Deadline::after_ms(10);
+    let mut n = 0u32;
+    while n < 100_000 && !dl.expired() {
         if !regs.bbc_busy.is_set(MJPEG_BBC_BUSY::BUSY) {
             return;
         }
         core::hint::spin_loop();
+        n += 1;
     }
 }
 
