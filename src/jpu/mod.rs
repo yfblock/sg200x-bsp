@@ -5,7 +5,7 @@
 
 mod decoder;
 mod header;
-mod mem;
+pub mod mem;
 pub mod regs;
 
 pub use decoder::{DecodeResult, JpuDecoder, JpuDmaToPhysFn, JpuMmio};

@@ -195,6 +195,26 @@ pub fn hardware_init_at(jpu_base: usize, top_base: usize, vc_base: usize) {
     wait_sw_reset_done_at(jpu_base);
 }
 
+/// 和 [`hardware_init_at`] 一样，但**不设 VD_REMAP**。
+/// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr[39:32]），
+/// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
+/// 小核 identity 映射（VA=PA），不需要地址扩展。
+pub fn hardware_init_at_no_vd_remap(jpu_base: usize, top_base: usize, vc_base: usize) {
+    mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
+    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
+    // 不设 TOP_DDR_ADDR_MODE_OFF / VD_REMAP——小核 32 位地址不需要扩展
+    mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
+    let _ = mmio_read32(vc_base);
+
+    let regs = jpu_regs_at(jpu_base);
+    let _ = regs.pic_status.get();
+    regs.bbc_bas_addr
+        .write(VALUE32::VAL.val(JPU_WARMUP_BBC_BASE));
+    let _ = regs.bbc_bas_addr.get();
+
+    wait_sw_reset_done_at(jpu_base);
+}
+
 /// 默认物理基址 bring-up。
 pub fn hardware_init() {
     hardware_init_at(JPU_REG_BASE, TOP_BASE, VC_REG_BASE);

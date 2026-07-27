@@ -94,6 +94,98 @@ impl JpuDecoder {
         Ok(decoder)
     }
 
+    /// 创建解码器，**跳过** `hardware_init_at`（假定 U-Boot/Bootloader 已初始化 JPU 时钟/复位）。
+    /// 适用于小核（C906L）等不能写 TOP 寄存器的场景——`hardware_init_at` 里的
+    /// `TOP_DDR_ADDR_MODE_OFF` 写入会改变大核的 DDR 地址映射导致大核崩溃。
+    ///
+    /// `dma_pool_base` / `dma_pool_size`：JPU DMA 内存池的物理地址和大小。
+    /// 小核应把 pool 放在普通 DRAM（非预留区），因为预留区的 JPU DMA 地址映射可能不正确。
+    pub unsafe fn new_at_skip_hw_init_with_pool(
+        jpu_base: usize,
+        top_base: usize,
+        vc_base: usize,
+        dma_to_phys: JpuDmaToPhysFn,
+        dma_pool_base: usize,
+        dma_pool_size: usize,
+    ) -> Result<Self, &'static str> {
+        let mut decoder = Self {
+            mmio: JpuMmio {
+                jpu_base,
+                top_base,
+                vc_base,
+            },
+            dma_to_phys,
+            stream_buf: PhysBuffer { addr: 0, size: 0 },
+            frame_buf: PhysBuffer { addr: 0, size: 0 },
+            initialized: false,
+        };
+        // 用外部 pool 初始化（绕过静态 DMA_BUFFER 在预留区的问题）
+        super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
+        decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
+            .ok_or("Failed to allocate stream buffer")?;
+        decoder.initialized = true;
+        Ok(decoder)
+    }
+
+    /// 创建解码器，用 `hardware_init_at_no_vd_remap`（设时钟/复位/VC/软复位，但不设 VD_REMAP）。
+    /// 适用于小核（C906L）：VD_REMAP 会把 32 位 DMA 地址扩展到 40 位，超出 DDR 范围。
+    /// DMA pool 用外部地址（绕过静态 DMA_BUFFER 在预留区的问题）。
+    pub unsafe fn new_at_no_vd_remap_with_pool(
+        jpu_base: usize,
+        top_base: usize,
+        vc_base: usize,
+        dma_to_phys: JpuDmaToPhysFn,
+        dma_pool_base: usize,
+        dma_pool_size: usize,
+    ) -> Result<Self, &'static str> {
+        let mut decoder = Self {
+            mmio: JpuMmio {
+                jpu_base,
+                top_base,
+                vc_base,
+            },
+            dma_to_phys,
+            stream_buf: PhysBuffer { addr: 0, size: 0 },
+            frame_buf: PhysBuffer { addr: 0, size: 0 },
+            initialized: false,
+        };
+        super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
+        super::regs::hardware_init_at_no_vd_remap(jpu_base, top_base, vc_base);
+        decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
+            .ok_or("Failed to allocate stream buffer")?;
+        decoder.initialized = true;
+        Ok(decoder)
+    }
+
+    pub unsafe fn new_at_skip_hw_init(
+        jpu_base: usize,
+        top_base: usize,
+        vc_base: usize,
+        dma_to_phys: JpuDmaToPhysFn,
+    ) -> Result<Self, &'static str> {
+        let mut decoder = Self {
+            mmio: JpuMmio {
+                jpu_base,
+                top_base,
+                vc_base,
+            },
+            dma_to_phys,
+            stream_buf: PhysBuffer { addr: 0, size: 0 },
+            frame_buf: PhysBuffer { addr: 0, size: 0 },
+            initialized: false,
+        };
+        decoder.init_skip_hw_init()?;
+        Ok(decoder)
+    }
+
+    fn init_skip_hw_init(&mut self) -> Result<(), &'static str> {
+        init_jpu_memory();
+        // 不调 hardware_init_at——U-Boot 已经使能了 JPU 时钟/复位/DDR remap。
+        self.stream_buf = jpu_alloc(STREAM_BUF_SIZE).ok_or("Failed to allocate stream buffer")?;
+        self.initialized = true;
+        Ok(())
+    }
+
     fn init(&mut self) -> Result<(), &'static str> {
         init_jpu_memory();
         hardware_init_at(self.mmio.jpu_base, self.mmio.top_base, self.mmio.vc_base);

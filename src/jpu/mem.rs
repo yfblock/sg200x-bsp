@@ -144,6 +144,23 @@ pub fn init_jpu_memory() {
     });
 }
 
+/// 用外部缓冲区初始化 DMA 内存池（绕过静态 DMA_BUFFER）。
+/// 用于小核（C906L）等需要把 DMA pool 放在普通 DRAM（非预留区）的场景：
+/// 预留区的 JPU DMA 地址映射可能不正确（DDR 控制器/总线防火墙限制）。
+///
+/// # Safety
+/// 调用方须保证 `[base, base+JPU_DRAM_PHYSICAL_SIZE)` 是有效的、独占的物理内存，
+/// 且 JPU DMA 引擎能正确访问该地址范围。
+pub unsafe fn init_jpu_memory_with(base: usize, size: usize) {
+    MEM_STATE.with_mut(|state| {
+        if state.initialized {
+            return;
+        }
+        state.pool.init(base, size.min(JPU_DRAM_PHYSICAL_SIZE));
+        state.initialized = true;
+    });
+}
+
 pub fn jpu_alloc(size: usize) -> Option<PhysBuffer> {
     MEM_STATE.with_mut(|state| {
         if !state.initialized {
