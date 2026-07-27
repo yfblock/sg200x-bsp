@@ -54,6 +54,13 @@ pub struct JpuDecoder {
     stream_buf: PhysBuffer,
     frame_buf: PhysBuffer,
     initialized: bool,
+    /// 调用方指定的输出缓冲（物理地址）。设了之后 `decode()` 让 JPU **直接 DMA
+    /// 到这里**，不再从内部 pool 分配 frame_buf，省掉一次整帧 memcpy。
+    output_buf: Option<PhysBuffer>,
+    /// CPU 是否会通过 cache 读解码输出。
+    /// 为 false 时跳过对输出缓冲的 dcache 维护——CPU 从不碰这块内存，
+    /// 就不会有脏行写回覆盖 DMA 数据，也不需要 invalidate 去看新数据。
+    cpu_reads_output: bool,
 }
 
 impl JpuDecoder {
@@ -89,6 +96,8 @@ impl JpuDecoder {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
             frame_buf: PhysBuffer { addr: 0, size: 0 },
             initialized: false,
+            output_buf: None,
+            cpu_reads_output: true,
         };
 
         decoder.init()?;
@@ -119,6 +128,8 @@ impl JpuDecoder {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
             frame_buf: PhysBuffer { addr: 0, size: 0 },
             initialized: false,
+            output_buf: None,
+            cpu_reads_output: true,
         };
         // 用外部 pool 初始化（绕过静态 DMA_BUFFER 在预留区的问题）
         super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
@@ -149,6 +160,8 @@ impl JpuDecoder {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
             frame_buf: PhysBuffer { addr: 0, size: 0 },
             initialized: false,
+            output_buf: None,
+            cpu_reads_output: true,
         };
         super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
         super::regs::hardware_init_at_no_vd_remap(jpu_base, top_base, vc_base);
@@ -174,6 +187,8 @@ impl JpuDecoder {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
             frame_buf: PhysBuffer { addr: 0, size: 0 },
             initialized: false,
+            output_buf: None,
+            cpu_reads_output: true,
         };
         decoder.init_skip_hw_init()?;
         Ok(decoder)
@@ -204,8 +219,28 @@ impl JpuDecoder {
         super::regs::hard_reset_at(self.mmio.jpu_base, self.mmio.top_base, self.mmio.vc_base);
     }
 
+    /// 让 `decode()` 把 YUV 直接 DMA 到 `pa`，不再用内部 pool 的 frame_buf。
+    ///
+    /// 典型用途：`pa` 就是最终消费者（如另一个核）读取的共享缓冲——省掉
+    /// 「解码到 pool → memcpy 到共享区」这一整帧拷贝。实测 640x480 那次
+    /// memcpy 要 34ms，占整帧耗时的 56%。
+    ///
+    /// # Safety
+    /// 调用方须保证 `[pa, pa+size)` 是有效、独占、JPU DMA 可达的物理内存。
+    pub unsafe fn set_output_buffer(&mut self, pa: usize, size: usize) {
+        self.output_buf = Some(PhysBuffer { addr: pa, size });
+    }
+
+    /// 声明 CPU 是否会通过 cache 读解码输出（默认 true）。
+    ///
+    /// 设为 false 可跳过对输出缓冲的两次 dcache 维护（640x480 实测各 5.8ms）。
+    /// 仅当 CPU 确实从不读这块内存时才可以设 false。
+    pub fn set_cpu_reads_output(&mut self, v: bool) {
+        self.cpu_reads_output = v;
+    }
+
     pub fn decode(&mut self, jpeg_data: &[u8]) -> Result<DecodeResult, &'static str> {
-        use super::trace::{mark, step};
+        use super::trace::{mark_timed as mark, step};
         mark(step::ENTER);
         if !self.initialized {
             return Err("JPU not initialized");
@@ -223,14 +258,29 @@ impl JpuDecoder {
         let (frame_size, layout) = frame_layout(&header_info)?;
         mark(step::FRAME_LAYOUT);
 
-        if !self.frame_buf.is_empty() {
-            jpu_free(self.frame_buf);
-            self.frame_buf = PhysBuffer { addr: 0, size: 0 };
+        match self.output_buf {
+            Some(out) => {
+                // 外部输出缓冲：不分配也不释放，直接 DMA 过去。
+                if frame_size > out.size {
+                    return Err("output buffer too small");
+                }
+                self.frame_buf = PhysBuffer { addr: out.addr, size: out.size };
+                mark(step::FREE_FRAME);
+                mark(step::ALLOC_FRAME);
+            }
+            None => {
+                if !self.frame_buf.is_empty() {
+                    jpu_free(self.frame_buf);
+                    self.frame_buf = PhysBuffer { addr: 0, size: 0 };
+                }
+                mark(step::FREE_FRAME);
+                self.frame_buf = jpu_alloc(frame_size).ok_or("Failed to alloc frame buf")?;
+                mark(step::ALLOC_FRAME);
+            }
         }
-        mark(step::FREE_FRAME);
-        self.frame_buf = jpu_alloc(frame_size).ok_or("Failed to alloc frame buf")?;
-        mark(step::ALLOC_FRAME);
-        dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        if self.cpu_reads_output {
+            dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        }
         mark(step::INV_FRAME);
 
         configure_stream_regs(
@@ -263,7 +313,9 @@ impl JpuDecoder {
         }
         mark(step::POLL);
 
-        dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        if self.cpu_reads_output {
+            dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        }
         mark(step::INV_AFTER);
 
         let r = DecodeResult {
@@ -282,7 +334,8 @@ impl Drop for JpuDecoder {
         if !self.stream_buf.is_empty() {
             jpu_free(self.stream_buf);
         }
-        if !self.frame_buf.is_empty() {
+        // 外部输出缓冲不属于内部 pool，不能 free。
+        if self.output_buf.is_none() && !self.frame_buf.is_empty() {
             jpu_free(self.frame_buf);
         }
     }
