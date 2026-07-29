@@ -371,12 +371,36 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                         p += 4;
                     }
                 }
-                let fps_x100 = if dflt_ival > 0 { 100_000_000_u32 / dflt_ival.max(1) } else { 0 };
-                let fps_min_x100 = if min_ival > 0 { 100_000_000_u32 / min_ival.max(1) } else { 0 };
+                // dwFrameInterval 是 **100ns** 单位，故 fps = 1e7/iv，fps*100 = 1e9/iv。
+                // 原来写的是 1e8/iv，所有帧率标注都小了 10 倍（"6.00 fps" 实为 60fps）。
+                let fps_x100 = if dflt_ival > 0 { 1_000_000_000_u32 / dflt_ival.max(1) } else { 0 };
+                let fps_min_x100 = if min_ival > 0 { 1_000_000_000_u32 / min_ival.max(1) } else { 0 };
                 log::info!("UVC: VS-frame fmt_ix={cur_fmt_ix_for_frame} frame_ix={frame_ix} {}x{} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
                     w, h,
                     fps_x100 / 100, fps_x100 % 100,
                     fps_min_x100 / 100, fps_min_x100 % 100);
+                // 把该 frame 支持的 interval **全列出来**——只看 dflt/min 无法判断
+                // "某个目标帧率到底可选不可选"（离散表只有一档时，任何偏好都是空操作）。
+                if ival_type > 0 {
+                    let mut p = i + 26;
+                    for k in 0..ival_type as usize {
+                        if p + 4 > i + bl {
+                            break;
+                        }
+                        let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
+                        let f = if v > 0 { 1_000_000_000_u32 / v } else { 0 };
+                        log::info!("UVC:   ival[{}] = {} ({}.{:02} fps)", k, v, f / 100, f % 100);
+                        p += 4;
+                    }
+                } else if bl >= 38 {
+                    let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
+                    let dw_max = u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
+                    let dw_step = u32::from_le_bytes([cfg[i + 34], cfg[i + 35], cfg[i + 36], cfg[i + 37]]);
+                    let fmin = if dw_max > 0 { 1_000_000_000_u32 / dw_max } else { 0 };
+                    let fmax = if dw_min > 0 { 1_000_000_000_u32 / dw_min } else { 0 };
+                    log::info!("UVC:   ival continuous: min={dw_min} max={dw_max} step={dw_step} => {}.{:02}..{}.{:02} fps",
+                        fmin / 100, fmin % 100, fmax / 100, fmax % 100);
+                }
                 // 选定本 frame 描述符实际使用的 interval：
                 // 设了 PREFERRED_FRAME_INTERVAL 时选最接近它的可用值；否则沿用最小（最高 fps）。
                 let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, min_ival, ival_type);
@@ -503,10 +527,20 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
         return Err(UsbError::NotImplemented);
     };
 
-    let (fmt_ix, frame_ix, frame_w, frame_h, interval, is_mjpeg) = match mjpeg_pick {
-        Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, true),
-        None => match uncomp_pick {
-            Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, false),
+    // 格式优先级：默认 MJPEG 优先（带宽小）。设了 PREFER_UNCOMPRESSED 则反过来——
+    // 本机 MJPEG 640x480 只有 60fps 一档，30fps 只存在于 Uncompressed，
+    // 且 Uncompressed 直接就是 YUV422，可以完全跳过 JPU 解码。
+    let prefer_uncomp = PREFER_UNCOMPRESSED.load(core::sync::atomic::Ordering::Relaxed);
+    let (first, second) = if prefer_uncomp {
+        (uncomp_pick, mjpeg_pick)
+    } else {
+        (mjpeg_pick, uncomp_pick)
+    };
+    let first_is_mjpeg = !prefer_uncomp;
+    let (fmt_ix, frame_ix, frame_w, frame_h, interval, is_mjpeg) = match first {
+        Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, first_is_mjpeg),
+        None => match second {
+            Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, !first_is_mjpeg),
             None => (1, 1, 0, 0, 333_333, false),
         },
     };
@@ -553,13 +587,19 @@ fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
     let alts = &sel.isoch_alts[..sel.isoch_alts_count as usize];
     let mut best_fit: Option<(u8, u16, u32)> = None;
     let mut best_max: Option<(u8, u16, u32)> = None;
+    // 允许 mult>1（高带宽等时，每微帧多个事务）。原来这里 `if mult > 1 { continue }`
+    // 把 alt 永久钉死在 mult=1，即本机 1020 B/微帧 = 8.16 MB/s；摄像头明确要求
+    // 3060（alt=3）时也只能 clamp 回 1020。YUY2 640x480@30fps 需 18.4 MB/s，
+    // 不放开 mult 根本达不到。仍优先选"刚好够用"的最小档，所以只需 1020 的
+    // MJPEG 场景行为不变（best_fit 仍是 alt=1）。
+    let allow_mult = ALLOW_HIGH_BW_ISOCH.load(core::sync::atomic::Ordering::Relaxed);
     for &(alt, mps_raw) in alts {
         let mps = u32::from(mps_raw & 0x7FF);
         let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
-        if mult > 1 {
+        if mult > 1 && !allow_mult {
             continue;
         }
-        let total = mps;
+        let total = mps * mult;
         if total >= need {
             let pick = (alt, mps_raw, total);
             best_fit = Some(match best_fit {
@@ -575,11 +615,25 @@ fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
             Some(p) => p,
         });
     }
-    let (new_alt, new_mps_raw, new_total) = best_fit
+    let forced = FORCE_ISOCH_ALT.load(core::sync::atomic::Ordering::Relaxed);
+    let forced_pick = if forced != 0 {
+        alts.iter().find(|&&(a, _)| a == forced).map(|&(a, m)| {
+            let mps = u32::from(m & 0x7FF);
+            let mult = u32::from((m >> 11) & 0x3) + 1;
+            (a, m, mps * mult)
+        })
+    } else {
+        None
+    };
+    if forced != 0 && forced_pick.is_none() {
+        log::warn!("UVC: FORCE_ISOCH_ALT={forced} 不在候选表里，忽略");
+    }
+    let (new_alt, new_mps_raw, new_total) = forced_pick
+        .or(best_fit)
         .or(best_max)
         .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
     if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
-        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={} (mult>1 skipped)",
+        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
             sel.alt_setting, sel.mps_raw,
             u32::from(sel.mps_raw & 0x7FF) * (u32::from((sel.mps_raw >> 11) & 0x3) + 1),
             new_alt, new_mps_raw, new_total, need);
@@ -853,6 +907,12 @@ pub struct UvcImageTuning {
     pub white_balance_temp_k: Option<u16>,
     /// 0=Disabled, 1=50Hz, 2=60Hz；`None` 时按 50Hz 设置。
     pub power_line_freq: Option<u8>,
+    /// `CT_AE_PRIORITY_CONTROL`：**0 = 帧率必须恒定**，1 = 允许自动曝光降帧率换曝光。
+    ///
+    /// `None` 沿用历史行为（1）。注意设 1 时摄像头可能远低于描述符声称的帧率——
+    /// 实测本机 0c45:64ab 声称 60fps，AE priority=1 时只给 16.7fps。
+    /// 需要稳定高帧率就设 `Some(0)`（弱光下画面会变暗）。
+    pub ae_priority: Option<u8>,
 }
 
 /// 摄像头初始化常用控制：**自动白平衡**、**自动曝光**、**关闭手动 Hue**、**Power-line 50Hz**、
@@ -951,14 +1011,17 @@ pub fn uvc_init_camera_controls(
             log::info!("UVC: CT.AeMode = {applied:#04x}");
 
             if (ent.ct_controls & (1 << 2)) != 0 {
-                let _ = try_set_cur_u8(
+                let prio = tune.ae_priority.unwrap_or(1);
+                if try_set_cur_u8(
                     dev,
                     ep0_mps,
                     ent.vc_interface,
                     ct,
                     CT_AE_PRIORITY_CONTROL,
-                    1,
-                );
+                    prio,
+                ) {
+                    log::info!("UVC: CT.AePriority = {prio} (0=帧率恒定, 1=允许降帧率)");
+                }
             }
         }
 
@@ -1019,6 +1082,8 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
 pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelection) -> UsbResult<()> {
     reset_frame_continuity();
+    // 帧组装按格式分流：MJPEG 认 SOI/EOI，Uncompressed 只认 FID/EOF。
+    CAPTURE_UNCOMPRESSED.store(!sel.is_mjpeg, core::sync::atomic::Ordering::Relaxed);
     let _ = dwc2_ep0::ep0_control_write_no_data(
         dev,
         setup::set_interface(0, sel.vs_interface),
@@ -1057,7 +1122,7 @@ pub fn uvc_start_video_stream(dev: u32, ep0_mps: u32, sel: &mut UvcStreamSelecti
     sel.negotiated_payload_size = u32::from_le_bytes([probe[22], probe[23], probe[24], probe[25]]);
     sel.negotiated_frame_size = u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
 
-    // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt（跳过 mult>1）。
+    // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt。
     reselect_isoch_alt_for_payload(sel);
 
     // 若 reselect 降级到了更低带宽的 alt（例如 mult=1），须把 COMMIT 中的
@@ -1236,7 +1301,80 @@ fn process_packet(
     }
 }
 
+/// 采集的是 Uncompressed（裸像素）而非 MJPEG。
+///
+/// 帧组装逻辑原本完全按 MJPEG 写死：必须 payload 以 SOI(`ff d8`) 开头才开始累积、
+/// 帧尾必须有 EOI(`ff d9`)。裸像素没有这些标记，不区分的话永远收不到一帧。
+/// 由 [`uvc_start_video_stream`] 按选中的格式设置。
+static CAPTURE_UNCOMPRESSED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// 上一帧的采集统计：(loop 次数, 有数据次数, 采集期间经过的微帧数)。
+///
+/// 不能靠 `FRAME_DEBUG` 的每帧日志来量这个——那行日志 ~100 字符，115200 波特下
+/// 要 ~8.7ms，而整个采集才 ~11ms，测出来的全是打印时间。这里只累加不打印，
+/// 由调用方节流输出。
+static CAP_LOOPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CAP_DATA: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CAP_UFRAMES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// 取走并清零采集统计：`(loops, data, uframes)`。
+/// `uframes / loops` = 平均每次传输占掉几个微帧（125us）；>1 即跟不上微帧节奏。
+pub fn take_capture_stats() -> (u32, u32, u32) {
+    (
+        CAP_LOOPS.swap(0, core::sync::atomic::Ordering::Relaxed),
+        CAP_DATA.swap(0, core::sync::atomic::Ordering::Relaxed),
+        CAP_UFRAMES.swap(0, core::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// 本帧实际收到的字节数（可能超过组装缓冲容量）。
+///
+/// Uncompressed 单帧 640x480 = 614400 B，远大于组装区（`UVC_BULK_DMA_CAP` 扣掉
+/// 工作区后仅 327680 B）。测吞吐时不需要留下整帧，超出容量的部分只计数不写入，
+/// 这样无需把 `DMA_BUF`（static，在 .bss 里）扩大到会撞进共享 YUV 缓冲的程度。
+static FRAME_BYTES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// 读取并清零上一帧的实际字节数。
+pub fn take_frame_bytes() -> u32 {
+    FRAME_BYTES.swap(0, core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Uncompressed 帧组装：只按 FID 翻转 / EOF 判定边界，不看 SOI/EOI。
+fn process_packet_capturing_uncomp(
+    state: &mut FrameState,
+    p: CapturingPacket<'_>,
+) -> UsbResult<bool> {
+    let FrameState::Capturing { frame_fid, saw_data } = state else {
+        return Ok(false);
+    };
+    if p.cur_fid != *frame_fid {
+        // FID 翻转 = 上一帧结束
+        if *saw_data {
+            return Ok(true);
+        }
+        *p.jpeg_len = 0;
+        *frame_fid = p.cur_fid;
+        *saw_data = false;
+    }
+    if p.payload_len > 0 {
+        let hlen = p.pkt[0] as usize;
+        let payload = &p.pkt[hlen..];
+        FRAME_BYTES.fetch_add(payload.len() as u32, core::sync::atomic::Ordering::Relaxed);
+        // 超出组装区就只计数不写——测吞吐不需要留下整帧。
+        if *p.jpeg_len + payload.len() <= p.jpeg_cap {
+            dwc2_ep0::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len, payload)?;
+        }
+        *p.jpeg_len += payload.len();
+        *saw_data = true;
+    }
+    Ok(p.eof && *saw_data)
+}
+
 fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> UsbResult<bool> {
+    if CAPTURE_UNCOMPRESSED.load(core::sync::atomic::Ordering::Relaxed) {
+        return process_packet_capturing_uncomp(state, p);
+    }
     let FrameState::Capturing { frame_fid, saw_data } = state else {
         return Ok(false);
     };
@@ -1310,6 +1448,43 @@ pub static FRAME_DEBUG: core::sync::atomic::AtomicBool =
 /// 适用场景：低端 webcam 硬件 JPEG 编码器吐 1280×720 时只有 ~26K 字节，每像素
 /// 0.028B 必然出现块状/马赛克伪影。把上限设为 640×480 = 307_200 后，同样字节数
 /// 的 JPEG 在更小分辨率上"每像素 byte 数"提升约 3 倍，主观质量显著改善。
+/// 是否允许选用 `bMaxBurst`/mult>1 的**高带宽等时**端点（每微帧多个事务）。
+///
+/// 默认关闭：mult>1 需要主机控制器正确处理高带宽等时，DWC2 上未经充分验证，
+/// 保守起见不改变既有使用者（如 StarryOS `UvcSession`）的行为。
+/// 需要超过 mult=1 带宽的模式（例如 YUY2 640x480@30fps 需 18.4 MB/s，
+/// 而 mult=1 只有 8.16 MB/s）必须先打开它。
+/// 调试用：强制使用指定的 Isoch alt（0 = 不强制，按协商结果选）。
+/// 用来单独验证某个 alt（尤其 mult>1 的高带宽档）在主机控制器上是否真能跑。
+pub static FORCE_ISOCH_ALT: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+
+/// 设置 [`FORCE_ISOCH_ALT`]。须在 [`parse_uvc_video_stream`] 之前调用。
+pub fn set_force_isoch_alt(alt: u8) {
+    FORCE_ISOCH_ALT.store(alt, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// 是否优先选择 Uncompressed(YUY2) 而非 MJPEG。
+///
+/// 默认 false（MJPEG 优先，省带宽）。打开后可拿到摄像头的原生 YUV422，
+/// **完全不需要 JPU 解码**；代价是带宽（640x480@30fps = 18.4 MB/s），
+/// 通常还须同时打开 [`ALLOW_HIGH_BW_ISOCH`]。
+pub static PREFER_UNCOMPRESSED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// 设置 [`PREFER_UNCOMPRESSED`]。须在 [`parse_uvc_video_stream`] 之前调用。
+pub fn set_prefer_uncompressed(v: bool) {
+    PREFER_UNCOMPRESSED.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
+pub static ALLOW_HIGH_BW_ISOCH: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// 设置 [`ALLOW_HIGH_BW_ISOCH`]。须在 [`parse_uvc_video_stream`] 之前调用。
+pub fn set_allow_high_bw_isoch(v: bool) {
+    ALLOW_HIGH_BW_ISOCH.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
 pub static PREFERRED_MAX_PIXELS: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
 
@@ -1372,8 +1547,8 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
     };
     let mut debug_remaining: u32 = 0;
     let frame_dbg = FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed);
-    // 只有 FRAME_DEBUG=true 时才采集 uframe 时间戳，避免每帧多余的 mmio 读。
-    let uf_start = if frame_dbg { dwc2_ep0::current_uframe() } else { 0 };
+    // 始终采样（2 次 MMIO 可忽略）：采集统计需要它，且不能依赖会打印的 FRAME_DEBUG。
+    let uf_start = dwc2_ep0::current_uframe();
     let mut uf_first_switch: u32 = uf_start;
     let mut uframes_at_switch: u32 = 0;
 
@@ -1446,6 +1621,10 @@ pub fn uvc_capture_one_frame(dev: u32, ep0_mps: u32, sel: &UvcStreamSelection) -
                     if let FrameState::Capturing { frame_fid, .. } = state {
                         LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
                     }
+                    let dtot = dwc2_ep0::current_uframe().wrapping_sub(uf_start) & 0xffff;
+                    CAP_LOOPS.fetch_add(transfers, core::sync::atomic::Ordering::Relaxed);
+                    CAP_DATA.fetch_add(data_transfers, core::sync::atomic::Ordering::Relaxed);
+                    CAP_UFRAMES.fetch_add(dtot, core::sync::atomic::Ordering::Relaxed);
                     if frame_dbg {
                         let uf_end = dwc2_ep0::current_uframe();
                         let dwait = uf_first_switch.wrapping_sub(uf_start) & 0xffff;

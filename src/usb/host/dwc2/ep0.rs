@@ -6,12 +6,13 @@
 
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::usb::error::{UsbError, UsbResult};
 use crate::utils::cache;
 use crate::usb;
 use crate::usb::setup;
-use super::regs::{Dwc2HostChannel, Dwc2Regs, HCCHAR, HCINT, HCTSIZ, HFNUM};
+use super::regs::{Dwc2HostChannel, Dwc2Regs, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 #[allow(dead_code)]
@@ -46,6 +47,47 @@ const HCCHAR_MC_SHIFT: u32 = 20;
 
 // HCINT 写 1 清除：清完整 11 位（含 ACK/NYET 等）。
 const HCINT_ALL_W1C: u32 = 0x7FF;
+
+/// 每个通道的「传输完成」flag，由 USB ISR (`handle_usb_irq`) 置位，
+/// `ch_wait_halted` 每轮检查一次。下标 = 通道号（0=EP0, 1=Bulk/Isoch）。
+static CH_DONE: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
+
+/// USB ISR 被调用的次数（诊断用：判断中断是否真的到达小核）。
+static USB_ISR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// 取走 USB ISR 计数（swap 清零）。
+pub fn take_usb_isr_count() -> u32 {
+    USB_ISR_COUNT.swap(0, Ordering::Relaxed)
+}
+
+/// USB 中断处理：由 trap handler 调用。
+///
+/// DWC2 中断链路：通道完成 → `HCINT.CHHLTD` → `HAINT` → `GINTSTS.HCHINT`
+/// → PLIC source 30 → M-mode trap。本函数清 `HCINT` 并设 `CH_DONE` 唤醒等待者。
+pub fn handle_usb_irq() {
+    USB_ISR_COUNT.fetch_add(1, Ordering::Relaxed);
+    let r = regs();
+    if !r.gintsts.is_set(GINTSTS::HCHINT) {
+        return;
+    }
+    // HAINT @ offset 0x414：每 bit 对应一个通道的中断状态。
+    // regs.rs 没定义这个字段，直接 raw 读。
+    let haint = unsafe {
+        core::ptr::read_volatile(((r as *const Dwc2Regs as usize) + 0x414) as *const u32)
+    };
+    for ch in 0..2u32 {
+        if haint & (1 << ch) == 0 {
+            continue;
+        }
+        let c = channel(ch);
+        let hcint = c.hcint.extract();
+        // 清掉本通道所有中断位（W1C）
+        c.hcint.set(hcint.get());
+        if hcint.is_set(HCINT::CHHLTD) {
+            CH_DONE[ch as usize].store(true, Ordering::Release);
+        }
+    }
+}
 
 /// `HCTSIZ.PID` 编码：与 DesignWare 主机通道 `HCTSIZ` 字段一致（SETUP / DATA0/1/2）。
 pub const PID_DATA0: u32 = 0;
@@ -178,9 +220,22 @@ pub fn abort_channel(ch: u32) {
     ch_halt(ch);
 }
 
+/// 等通道 halt。中断 flag 优先，`spin_delay` 轮询兜底。
+///
+/// 两条路径都留着是因为 PLIC source 30 在 C906L 上触发率很低——
+/// 实测每 100 帧约 69 次 ISR，而同期有 7700 次通道传输，覆盖率不到 1%。
+/// 中断链路本身是正确的（`HCINTMSK` 已编程、无误触发），只是不足以替代轮询。
 fn ch_wait_halted(ch: u32) -> UsbResult<HcintSnapshot> {
     let c = channel(ch);
+    let idx = ch as usize;
     for _ in 0..8_000_000u32 {
+        // 中断路径：USB ISR 设了 CH_DONE
+        if CH_DONE[idx].swap(false, Ordering::AcqRel) {
+            let hi = c.hcint.extract();
+            c.hcint.set(hi.get());
+            return Ok(hi);
+        }
+        // 轮询兜底。实测 PLIC source 30 覆盖率不足 1%，绝大多数传输走这里。
         let hi = c.hcint.extract();
         if hi.is_set(HCINT::CHHLTD) {
             c.hcint.set(hi.get());
@@ -207,6 +262,7 @@ unsafe fn ch_xfer(ch: u32, hcchar: u32, hctsiz: u32, dma_off: u32) -> UsbResult<
         ch_halt(ch);
         c.hcsplt.set(0);
         c.hcint.set(HCINT_ALL_W1C);
+        c.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
         c.hctsiz.set(hctsiz);
         usb_bus_fence_before_dma();
         c.hcdma.set(dmap);
@@ -259,6 +315,7 @@ unsafe fn ch_xfer_video_retryable(
     ch_halt(ch);
     c.hcsplt.set(0);
     c.hcint.set(HCINT_ALL_W1C);
+    c.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
     c.hctsiz.set(hctsiz);
     let dmap = dma_phys(dma_off as usize);
     usb_bus_fence_before_dma();
@@ -798,6 +855,7 @@ pub fn isoch_in_uframe(dev: u32, ep: u32, mps_raw: u16, dma_off: usize) -> UsbRe
         ch_halt(CH_BULK);
         c.hcsplt.set(0);
         c.hcint.set(HCINT_ALL_W1C);
+        c.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
         c.hctsiz.set(tsiz);
         let dmap = dma_phys(dma_off);
         usb_bus_fence_before_dma();
@@ -857,6 +915,7 @@ pub fn isoch_in(dev: u32, ep: u32, mps: u32, len: usize, dma_off: usize) -> UsbR
         ch_halt(CH_BULK);
         c.hcsplt.set(0);
         c.hcint.set(HCINT_ALL_W1C);
+        c.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
         c.hctsiz.set(tsiz);
         let dmap = dma_phys(dma_off);
         usb_bus_fence_before_dma();

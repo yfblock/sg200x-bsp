@@ -47,6 +47,47 @@ pub mod trace {
         TRACE_ADDR.store(pa, Ordering::Relaxed);
     }
 
+    /// 各步累计耗时（rdtime ticks），下标见 `step`。只累加不打印。
+    pub static STEP_TICKS: [core::sync::atomic::AtomicU32; 17] =
+        [const { core::sync::atomic::AtomicU32::new(0) }; 17];
+
+    #[inline]
+    fn now_ticks() -> u64 {
+        #[cfg(target_arch = "riscv64")]
+        {
+            let t: usize;
+            unsafe { core::arch::asm!("rdtime {0}", out(reg) t, options(nomem, nostack)) };
+            t as u64
+        }
+        #[cfg(not(target_arch = "riscv64"))]
+        {
+            0
+        }
+    }
+
+    /// 取走并清零某步的累计 ticks。
+    pub fn take_step_ticks(step: u32) -> u32 {
+        STEP_TICKS
+            .get(step as usize)
+            .map(|a| a.swap(0, Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// 记一步耗时：把「上次 mark 到现在」累加到 `step`。
+    #[inline]
+    pub(crate) fn mark_timed(step: u32) {
+        use core::sync::atomic::AtomicU64;
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        let now = now_ticks();
+        let prev = LAST.swap(now, Ordering::Relaxed);
+        if prev != 0 && now > prev {
+            if let Some(a) = STEP_TICKS.get(step as usize) {
+                a.fetch_add((now - prev) as u32, Ordering::Relaxed);
+            }
+        }
+        mark(step);
+    }
+
     #[inline]
     pub(crate) fn mark(step: u32) {
         let a = TRACE_ADDR.load(Ordering::Relaxed);
