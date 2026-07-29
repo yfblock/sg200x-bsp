@@ -79,3 +79,4 @@ pub mod sdmmc;
 pub mod soc;
 pub mod usb;
 pub mod utils;
+pub mod ive;

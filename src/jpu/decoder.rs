@@ -262,6 +262,10 @@ impl JpuDecoder {
             Some(out) => {
                 // 外部输出缓冲：不分配也不释放，直接 DMA 过去。
                 if frame_size > out.size {
+                    log::warn!(
+                        "[JPU] output buf too small: frame_size={} out.size={} {}x{} fmt={}",
+                        frame_size, out.size, header_info.width, header_info.height, header_info.format
+                    );
                     return Err("output buffer too small");
                 }
                 self.frame_buf = PhysBuffer { addr: out.addr, size: out.size };
