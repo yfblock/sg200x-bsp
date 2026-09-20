@@ -132,7 +132,7 @@ impl JpuDecoder {
             cpu_reads_output: true,
         };
         // 用外部 pool 初始化（绕过静态 DMA_BUFFER 在预留区的问题）
-        super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
+        unsafe { super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size) };
         decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
             .ok_or("Failed to allocate stream buffer")?;
         decoder.initialized = true;
@@ -163,7 +163,7 @@ impl JpuDecoder {
             output_buf: None,
             cpu_reads_output: true,
         };
-        super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
+        unsafe { super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size) };
         super::regs::hardware_init_at_no_vd_remap(jpu_base, top_base, vc_base);
         decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
             .ok_or("Failed to allocate stream buffer")?;
